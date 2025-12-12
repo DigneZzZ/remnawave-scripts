@@ -805,7 +805,7 @@ schedule_menu() {
     
     while true; do
         clear
-        echo -e "\033[1;37m📅 Backup Scheduler Management\033[0m"
+        echo -e "\033[1;37m📅 Automatic Backup Scheduler\033[0m"
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
         echo
         
@@ -8670,7 +8670,7 @@ main_menu() {
         echo
         echo -e "\033[1;37m💾 Backup & Restore:\033[0m"
         echo -e "   \033[38;5;15m11)\033[0m 💾 Manual backup"
-        echo -e "   \033[38;5;15m12)\033[0m 📅 Scheduled backup system"
+        echo -e "   \033[38;5;15m12)\033[0m 📅 Automatic backups (Schedule)"
         echo -e "   \033[38;5;15m13)\033[0m 🔄 Restore from backup"
         echo
         echo -e "\033[1;37m🔧 Configuration & Access:\033[0m"

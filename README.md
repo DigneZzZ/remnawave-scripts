@@ -32,14 +32,14 @@ A comprehensive collection of enterprise-grade Bash scripts for **Remnawave Pane
 ### Backup & Migration System
 * [💾 Backup & Restore System](#-backup--restore-system)
 * [📅 Scheduled Backups](#-scheduled-backups)
-* [🔄 Migration & Restore](#%EF%B8%8F-migration--restore)
-* [� Telegram Integration](#-telegram-integration)
+* [🔄 Migration & Restore](#-migration--restore)
+* [📱 Telegram Integration](#-telegram-integration)
 
 ### Advanced Features
 * [🔐 Security Features](#-security-features)
-* [🎛️ Management Commands](#%EF%B8%8F-management-commands)
+* [🎛️ Management Commands](#-management-commands)
 * [📊 Monitoring & Logs](#-monitoring--logs)
-* [⚙️ System Requirements](#%EF%B8%8F-system-requirements)
+* [⚙️ System Requirements](#-system-requirements)
 
 ### Community & Support
 * [🤝 Contributing](#-contributing)
