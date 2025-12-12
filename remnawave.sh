@@ -6185,6 +6185,14 @@ install_remnawave() {
         META_DESCRIPTION="Remnawave VPN - The best VPN service"
     fi
 
+    # Ask about displaying RAW links on subscription page
+    read -p "Display RAW links on subscription page? (y/N): " -r display_raw_keys
+    if [[ "$display_raw_keys" =~ ^[Yy]$ ]]; then
+        SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=true
+    else
+        SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=false
+    fi
+
     # Ask about Telegram integration
     read -p "Do you want to enable Telegram notifications? (y/n): " -r enable_telegram
     IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
@@ -6351,6 +6359,9 @@ CUSTOM_SUB_PREFIX=${CUSTOM_SUB_PREFIX}
 META_TITLE="$META_TITLE"
 META_DESCRIPTION="$META_DESCRIPTION"
 
+### RAW LINKS ###
+SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=$SUBSCRIPTION_UI_DISPLAY_RAW_KEYS
+
 # If you use "Caddy with security" addon, you can place here X-Api-Key, which will be applied to requests to Remnawave Panel.
 #CADDY_AUTH_API_TOKEN=
 
@@ -6367,7 +6378,7 @@ cat > "$APP_CONFIG_FILE" <<'EOL'
       "ru"
     ],
     "branding": {
-      "name": "VsemVPN подписка",
+      "name": "Remnawave sub-page",
       "logoUrl": "https://remna.st/img/logo.svg",
       "supportUrl": "https://t.me/"
     }
