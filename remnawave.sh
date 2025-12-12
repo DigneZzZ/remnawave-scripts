@@ -3569,6 +3569,12 @@ restore_command() {
                 echo -e "  \033[38;5;244m$APP_NAME restore --file backup.tar.gz --path /root\033[0m"
                 echo -e "  \033[38;5;244m$APP_NAME restore --database-only --file backup.tar.gz\033[0m"
                 echo
+                echo -e "\033[1;37mQuick restore (common cases):\033[0m"
+                echo -e "  \033[38;5;244mFull panel on clean host\033[0m"
+                echo -e "  \033[38;5;15msudo $APP_NAME restore --file /path/to/remnawave_full_backup.tar.gz\033[0m"
+                echo -e "  \033[38;5;244mDB-only into existing install\033[0m"
+                echo -e "  \033[38;5;15msudo $APP_NAME restore --database-only --file /path/to/database.sql.gz\033[0m"
+                echo
                 exit 0
                 ;;
             --) shift; break ;;  # Конец опций
