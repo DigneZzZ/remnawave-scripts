@@ -7,7 +7,7 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.5.9
+# VERSION=2.6.0
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -36,7 +36,7 @@ else
 fi
 
 # Script Configuration
-SCRIPT_VERSION="2.5.9"
+SCRIPT_VERSION="2.6.0"
 GITHUB_REPO="dignezzz/remnawave-scripts"
 UPDATE_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/selfsteal.sh"
 SCRIPT_URL="$UPDATE_URL"
@@ -3225,33 +3225,35 @@ status_command() {
     fi
     
     # Show configuration summary
+    echo
+    echo -e "${WHITE}⚙️  Configuration:${NC}"
+    
+    local domain=""
+    local port=""
+    local connection_mode=""
+    
     if [ -f "$APP_DIR/.env" ]; then
-        echo
-        echo -e "${WHITE}⚙️  Configuration:${NC}"
-        local domain
-        local port
-        domain=$(grep "SELF_STEAL_DOMAIN=" "$APP_DIR/.env" | cut -d'=' -f2)
-        port=$(grep "SELF_STEAL_PORT=" "$APP_DIR/.env" | cut -d'=' -f2)
-        local connection_mode
-        connection_mode=$(grep "Connection Mode:" "$APP_DIR/.env" | cut -d':' -f2 | tr -d ' ')
-        
-        printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Web Server:" "$server_name"
-        printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Domain:" "$domain"
-        
-        # Show connection mode for Nginx
-        if [ "$WEB_SERVER" = "nginx" ]; then
-            if [ "$connection_mode" = "socket" ] || [ -z "$connection_mode" ]; then
-                printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Connection:" "Unix Socket"
-                printf "   ${WHITE}%-15s${NC} ${CYAN}%s${NC}\n" "Xray target:" "$SOCKET_PATH"
-            else
-                printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Connection:" "TCP Port"
-                printf "   ${WHITE}%-15s${NC} ${CYAN}%s${NC}\n" "Xray target:" "127.0.0.1:$port"
-            fi
-        else
-            printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "HTTPS Port:" "$port"
-        fi
-        printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "HTML Path:" "$HTML_DIR"
+        domain=$(grep "SELF_STEAL_DOMAIN=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2 || true)
+        port=$(grep "SELF_STEAL_PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2 || true)
+        connection_mode=$(grep "Connection Mode:" "$APP_DIR/.env" 2>/dev/null | cut -d':' -f2 | tr -d ' ' || true)
     fi
+    
+    printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Web Server:" "$server_name"
+    printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Domain:" "${domain:-N/A}"
+    
+    # Show connection mode for Nginx
+    if [ "$WEB_SERVER" = "nginx" ]; then
+        if [ "$connection_mode" = "socket" ] || [ -z "$connection_mode" ]; then
+            printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Connection:" "Unix Socket"
+            printf "   ${WHITE}%-15s${NC} ${CYAN}%s${NC}\n" "Xray target:" "$SOCKET_PATH"
+        else
+            printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Connection:" "TCP Port"
+            printf "   ${WHITE}%-15s${NC} ${CYAN}%s${NC}\n" "Xray target:" "127.0.0.1:${port:-9443}"
+        fi
+    else
+        printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "HTTPS Port:" "${port:-9443}"
+    fi
+    printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "HTML Path:" "$HTML_DIR"
     printf "   ${WHITE}%-15s${NC} ${GRAY}%s${NC}\n" "Script Version:" "v$SCRIPT_VERSION"
     
     # Show SSL certificate info for Nginx
