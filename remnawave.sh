@@ -72,7 +72,6 @@ INSTALL_DIR="/opt"
 APP_DIR="$INSTALL_DIR/$APP_NAME"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 ENV_FILE="$APP_DIR/.env"
-APP_CONFIG_FILE="$APP_DIR/app-config.json"
 SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnawave.sh"  # Update with actual URL
 SUB_ENV_FILE="$APP_DIR/.env.subscription"
 BACKUP_CONFIG_FILE="$APP_DIR/backup-config.json"
@@ -6180,25 +6179,6 @@ install_remnawave() {
     # Construct SUB_PUBLIC_DOMAIN with the prefix
     SUB_PUBLIC_DOMAIN="${SUB_DOMAIN}/${CUSTOM_SUB_PREFIX}"
 
-    # Ask for META_TITLE and META_DESCRIPTION
-    read -p "Enter the META_TITLE for subscription page (default: 'Remnawave VPN - Your Subscription Page'): " -r META_TITLE
-    if [[ -z "$META_TITLE" ]]; then
-        META_TITLE="Remnawave VPN - Your Subscription Page"
-    fi
-
-    read -p "Enter the META_DESCRIPTION for subscription page (default: 'Remnawave VPN - The best VPN service'): " -r META_DESCRIPTION
-    if [[ -z "$META_DESCRIPTION" ]]; then
-        META_DESCRIPTION="Remnawave VPN - The best VPN service"
-    fi
-
-    # Ask about displaying RAW links on subscription page
-    read -p "Display RAW links on subscription page? (y/N): " -r display_raw_keys
-    if [[ "$display_raw_keys" =~ ^[Yy]$ ]]; then
-        SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=true
-    else
-        SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=false
-    fi
-
     # Ask about Telegram integration
     read -p "Do you want to enable Telegram notifications? (y/n): " -r enable_telegram
     IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
@@ -6361,420 +6341,11 @@ CUSTOM_SUB_PREFIX=${CUSTOM_SUB_PREFIX}
 #MARZBAN_LEGACY_SECRET_KEY=
 #REMNAWAVE_API_TOKEN=
 
-### META FOR SUBSCRIPTION PAGE ###
-META_TITLE="$META_TITLE"
-META_DESCRIPTION="$META_DESCRIPTION"
-
-### RAW LINKS ###
-SUBSCRIPTION_UI_DISPLAY_RAW_KEYS=$SUBSCRIPTION_UI_DISPLAY_RAW_KEYS
-
 # If you use "Caddy with security" addon, you can place here X-Api-Key, which will be applied to requests to Remnawave Panel.
 #CADDY_AUTH_API_TOKEN=
 
 EOL
 colorized_echo green "Subscription environment saved in $SUB_ENV_FILE"
-
-    # Create app-config.json for subscription page with app and instruction links
-colorized_echo blue "Generating static app-config.json file"
-cat > "$APP_CONFIG_FILE" <<'EOL'
-
-{
-  "config": {
-    "additionalLocales": [
-      "ru"
-    ],
-    "branding": {
-      "name": "Remnawave sub-page",
-      "logoUrl": "https://remna.st/img/logo.svg",
-      "supportUrl": "https://t.me/"
-    }
-  },
-  "platforms": {
-    "android": [
-      {
-        "id": "happ",
-        "name": "Happ",
-        "isFeatured": true,
-        "urlScheme": "happ://add/",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://play.google.com/store/apps/details?id=com.happproxy",
-              "buttonText": {
-                "en": "Open in Google Play",
-                "ru": "Открыть в Google Play"
-              }
-            },
-            {
-              "buttonLink": "https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk",
-              "buttonText": {
-                "en": "Download APK",
-                "ru": "Скачать APK"
-              }
-            }
-          ],
-          "description": {
-            "en": "Open the page in Google Play and install the app. Or install the app directly from the APK file if Google Play is not working.",
-            "ru": "Откройте страницу в Google Play и установите приложение. Или установите приложение из APK файла напрямую, если Google Play не работает."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "Click the button below to add subscription",
-            "ru": "Нажмите кнопку ниже, чтобы добавить подписку"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "Open the app and connect to the server",
-            "ru": "Откройте приложение и подключитесь к серверу"
-          }
-        }
-      },
-      {
-        "id": "clash-meta",
-        "name": "Clash Meta",
-        "isFeatured": false,
-        "urlScheme": "clash://install-config?url=",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://github.com/MetaCubeX/ClashMetaForAndroid/releases/download/v2.11.7/cmfa-2.11.7-meta-universal-release.apk",
-              "buttonText": {
-                "en": "Download APK",
-                "ru": "Скачать APK"
-              }
-            },
-            {
-              "buttonLink": "https://f-droid.org/packages/com.github.metacubex.clash.meta/",
-              "buttonText": {
-                "en": "Open in F-Droid",
-                "ru": "Открыть в F-Droid"
-              }
-            }
-          ],
-          "description": {
-            "en": "Download and install Clash Meta APK",
-            "ru": "Скачайте и установите Clash Meta APK"
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "Tap the button to import configuration",
-            "ru": "Нажмите кнопку, чтобы импортировать конфигурацию"
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "Open Clash Meta and tap on Connect",
-            "ru": "Откройте Clash Meta и нажмите Подключиться"
-          }
-        }
-      },
-      {
-            "id": "v2raytun",
-            "name": "V2RayTun",
-            "isFeatured": false,
-            "urlScheme": "v2raytun://import/",
-            "installationStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "https://play.google.com/store/apps/details?id=com.v2raytun.android",
-                        "buttonText": {
-                            "en": "Open in Google Play",
-                            "ru": "Открыть в Google Play"
-                        }
-                    },
-                    {
-                        "buttonLink": "https://github.com/DigneZzZ/v2raytun/releases/latest/download/v2RayTun_universal.apk",
-                        "buttonText": {
-                            "en": "Download APK",
-                            "ru": "Скачать APK"
-                        }
-                    }
-                ],
-                "description": {
-                    "en": "Open the page in Google Play and install the app.",
-                    "ru": "Откройте страницу в Google Play и установите приложение."
-                }
-            },
-            "addSubscriptionStep": {
-                "description": {
-                    "en": "Click the button below to add subscription",
-                    "ru": "Нажмите кнопку ниже, чтобы добавить подписку"
-                }
-            },
-            "connectAndUseStep": {
-                "description": {
-                    "en": "Select a server and press the connect button.",
-                    "fa": "یک سرور را انتخاب کنید و دکمه اتصال را فشار دهید.",
-                    "ru": "Выберите сервер и нажмите кнопку подключения."
-                }
-            }
-        }
-    ],
-    "ios": [
-      {
-        "id": "happ",
-        "name": "Happ",
-        "isFeatured": true,
-        "urlScheme": "happ://add/",
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
-              "buttonText": {
-                "en": "Open in App Store [EU]",
-                "ru": "Открыть в App Store [EU]"
-              }
-            },
-            {
-              "buttonLink": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973",
-              "buttonText": {
-                "en": "Open in App Store [RU]",
-                "ru": "Открыть в App Store [RU]"
-              }
-            }
-          ],
-          "description": {
-            "en": "Open the page in App Store and install the app. Launch it, in the VPN configuration permission window click Allow and enter your passcode.",
-            "ru": "Откройте страницу в App Store и установите приложение. Запустите его, в окне разрешения VPN-конфигурации нажмите Allow и введите свой пароль."
-          }
-        },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "Click the button below — the app will open and the subscription will be added automatically",
-            "ru": "Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически."
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "In the main section, click the large power button in the center to connect to VPN. Don't forget to select a server from the server list. If needed, choose another server from the server list.",
-            "ru": "В главном разделе нажмите большую кнопку включения в центре для подключения к VPN. Не забудьте выбрать сервер в списке серверов. При необходимости выберите другой сервер из списка серверов."
-          }
-        }
-      },
-            {
-        "id": "shadowrocket",
-        "name": "Shadowrocket",
-        "isFeatured": false,
-        "urlScheme": "sub://",
-        "isNeedBase64Encoding": true,
-        "installationStep": {
-          "buttons": [
-            {
-              "buttonLink": "https://apps.apple.com/ru/app/shadowrocket/id932747118",
-              "buttonText": {
-                "en": "Open in App Store",
-                "ru": "Открыть в App Store"
-              }
-            }
-          ],
-          "description": {
-            "en": "Open the page in App Store and install the app. Launch it, in the VPN configuration permission window click Allow and enter your passcode.",
-            "ru": "Откройте страницу в App Store и установите приложение. Запустите его, в окне разрешения VPN-конфигурации нажмите Allow и введите свой пароль."
-          }
-        },
-        "additionalBeforeAddSubscriptionStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "shadowrocket://config/add/https://dignezzz.github.io/ru_direct.conf",
-                        "buttonText": {
-                            "en": "Add routing",
-                            "ru": "Добавить роутинг"
-                        }
-                    }
-                ],
-                "title": {
-                    "en": "Add routing",
-                    "ru": "Добавить роутинг"
-                },
-                "description": {
-                    "en": "Click the button below to add the ru_direct.conf configuration file.",
-                    "ru": "Нажмите кнопку ниже, чтобы добавить файл конфигурации ru_direct.conf."
-                }
-            },
-        "addSubscriptionStep": {
-          "description": {
-            "en": "Click the button below — the app will open and the subscription will be added automatically",
-            "ru": "Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически."
-          }
-        },
-        "connectAndUseStep": {
-          "description": {
-            "en": "In the main section, click the large power button in the center to connect to VPN. Don't forget to select a server from the server list. If needed, choose another server from the server list.",
-            "ru": "В главном разделе нажмите большую кнопку включения в центре для подключения к VPN. Не забудьте выбрать сервер в списке серверов. При необходимости выберите другой сервер из списка серверов."
-          }
-        }
-      }
-    ],
-    "linux": [
-      {
-            "id": "clash-verge",
-            "name": "Clash Verge",
-            "isFeatured": false,
-            "urlScheme": "clash://install-config?url=",
-            "installationStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "https://github.com/coolcoala/clash-verge-rev-lite/releases",
-                        "buttonText": {
-                            "en": "Linux",
-                            "ru": "Linux"
-                        }
-                    }
-                ],
-                "description": {
-                    "en": "Choose the version for your device, click the button below and install the app.",
-                    "ru": "Выبерите подходящую версию для вашего устройства, нажмите на кнопку ниже и установите приложение."
-                }
-            },
-            "addSubscriptionStep": {
-                "description": {
-                    "en": "Click the button below to add subscription",
-                    "ru": "Нажмите кнопку ниже, чтобы добавить подписку"
-                }
-            },
-            "connectAndUseStep": {
-                "description": {
-                    "en": "You can select a server in the Proxy section, and enable VPN in the Settings section. Set the TUN Mode switch to ON.",
-                    "ru": "Выбрать сервер можно в разделе Прокси, включить VPN можно в разделе Настройки. Установите переключатель TUN Mode в положение ВКЛ."
-                }
-            }
-        }
-    ],
-    "macos": [
-      {
-            "id": "koala-clash",
-            "name": "Koala Clash",
-            "isFeatured": true,
-            "urlScheme": "clash://install-config?url=",
-            "installationStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "https://github.com/coolcoala/clash-verge-rev-lite/releases/latest/download/Koala.Clash_x64.dmg",
-                        "buttonText": {
-                            "en": "macOS (Intel)",
-                            "ru": "macOS (Intel)"
-                        }
-                    },
-                    {
-                        "buttonLink": "https://github.com/coolcoala/clash-verge-rev-lite/releases/latest/download/Koala.Clash_aarch64.dmg",
-                        "buttonText": {
-                            "en": "macOS (Apple Silicon)",
-                            "ru": "macOS (Apple Silicon)"
-                        }
-                    }
-                ],
-                "description": {
-                    "en": "Choose the version for your device, click the button below and install the app.",
-                    "ru": "Выبерите подходящую версию для вашего устройства, нажмите на кнопку ниже и установите приложение."
-                }
-            },
-            "addSubscriptionStep": {
-                "description": {
-                    "en": "Click the button below to add subscription",
-                    "ru": "Нажмите кнопку ниже, чтобы добавить подписку"
-                }
-            },
-            "connectAndUseStep": {
-                "description": {
-                    "en": "You can select a server in the Proxy section, and enable VPN in the Settings section. Set the TUN Mode switch to ON.",
-                    "ru": "Выбрать сервер можно в разделе Прокси, включить VPN можно в разделе Настройки. Установите переключатель в положение ВКЛ."
-                }
-            }
-        },
-        {
-            "id": "V2RayTun",
-            "name": "V2RayTun",
-            "isFeatured": false,
-            "urlScheme": "v2raytun://import/",
-            "installationStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "https://apps.apple.com/ru/app/v2raytun/id6476628951",
-                        "buttonText": {
-                            "en": "macOS",
-                            "fa": "مک",
-                            "ru": "macOS"
-                        }
-                    }
-                ],
-                "description": {
-                    "en": "Open the page in App Store and install the app. Launch it, in the VPN configuration permission window click Allow and enter your passcode.",
-                    "ru": "Откройте страницу в App Store и установите приложение. Запустите его, в окне разрешения VPN-конфигурации нажмите Allow и введите свой пароль."
-                }
-            },
-            "addSubscriptionStep": {
-                "description": {
-                    "en": "Click the button below — the app will open and the subscription will be added automatically",
-                    "ru": "Нажмите кнопку ниже — приложение откроется, и подписка добавится автоматически."
-                }
-            },
-            "connectAndUseStep": {
-                "description": {
-                    "en": "Select a server and press the connect button.",
-                    "ru": "Выберите сервер и нажмите кнопку подключения."
-                }
-            },
-            "additionalAfterAddSubscriptionStep": {
-                "buttons": [],
-                "title": {
-                    "en": "Managed services",
-                    "ru": "Настройка сервисов роутинга"
-                },
-                "description": {
-                    "en": "Afer install go to the Services tab and set which of the services DONT NEED VPN",
-                    "ru": "После добавления подписки перейдите в раздел Сервисы и выделите там то, чему НЕ ТРЕБУЕТСЯ VPN"
-                }
-            }
-        }
-    ],
-    "windows": [
-      {
-            "id": "clash-verge",
-            "name": "Clash Verge",
-            "isFeatured": false,
-            "urlScheme": "clash://install-config?url=",
-            "installationStep": {
-                "buttons": [
-                    {
-                        "buttonLink": "https://github.com/coolcoala/clash-verge-rev-lite/releases/latest/download/Koala.Clash_x64-setup.exe",
-                        "buttonText": {
-                            "en": "Windows",
-                            "ru": "Windows"
-                        }
-                    }
-                ],
-                "description": {
-                    "en": "Choose the version for your device, click the button below and install the app.",
-                    "ru": "Выبерите подходящую версию для вашего устройства, нажмите на кнопку ниже и установите приложение."
-                }
-            },
-            "addSubscriptionStep": {
-                "description": {
-                    "en": "Click the button below to add subscription",
-                    "ru": "Нажмите кнопку ниже, чтобы добавить подписку"
-                }
-            },
-            "connectAndUseStep": {
-                "description": {
-                    "en": "You can select a server in the Proxy section, and enable VPN in the Settings section. Set the switch to ON.",
-                    "ru": "Выбрать сервер можно в разделе Прокси, включить VPN можно в разделе Настройки. Установите переключатель Tв положение ВКЛ."
-                }
-            }
-        }
-      
-    ],
-    "androidTV": [],
-    "appleTV": []
-  }
-}
-
-
-EOL
-colorized_echo green "Static instruction file saved in $APP_CONFIG_FILE"
-
 
     colorized_echo blue "Generating docker-compose.yml file"
     cat > "$COMPOSE_FILE" <<EOL
@@ -6840,19 +6411,10 @@ services:
         restart: always
         env_file:
             - .env.subscription
-# Picked up from file .env.subscription
-#        environment:
-#            - REMNAWAVE_PLAIN_DOMAIN=http://${APP_NAME}:${APP_PORT}
-#            - SUBSCRIPTION_PAGE_PORT=${SUB_PAGE_PORT}
-#            - CUSTOM_SUB_PREFIX=${CUSTOM_SUB_PREFIX}
-#            - META_TITLE=${META_TITLE}
-#            - META_DESCRIPTION=${META_DESCRIPTION}
         ports:
             - '127.0.0.1:${SUB_PAGE_PORT}:${SUB_PAGE_PORT}'
         networks:
             - ${APP_NAME}-network
-        volumes:
-            - ${APP_DIR}/app-config.json:/opt/app/frontend/assets/app-config.json
         logging:
           driver: json-file
           options:
@@ -8392,12 +7954,12 @@ check_single_image_update() {
         method_label="via manifest"
     fi
     
-    if [ -z "$local_digests" ]; then
-        # Образ не найден локально
+    if [ -z "$remote_digest" ]; then
+        # Не удалось получить remote digest - образ недоступен или приватный
+        echo "SKIP:$image|unavailable" >> "$result_file"
+    elif [ -z "$local_digests" ]; then
+        # Образ не найден локально, но доступен удалённо
         echo "NEW:$image|$method_label" >> "$result_file"
-    elif [ -z "$remote_digest" ]; then
-        # Не удалось получить remote digest - пропускаем
-        echo "SKIP:$image|$method_label" >> "$result_file"
     elif echo "$local_digests" | grep -q "$remote_digest"; then
         # Remote digest найден среди локальных - обновлений нет
         echo "OK:$image|$method_label" >> "$result_file"
@@ -8484,7 +8046,11 @@ check_images_for_updates() {
                 ;;
             SKIP)
                 skip_count=$((skip_count + 1))
-                echo -e "\033[38;5;244m   ⚠ $img (check skipped)\033[0m"
+                if [ "$method" = "unavailable" ]; then
+                    echo -e "\033[38;5;244m   ⚠ $img \033[38;5;240m[unavailable/private]\033[0m"
+                else
+                    echo -e "\033[38;5;244m   ⚠ $img (check skipped)\033[0m"
+                fi
                 ;;
         esac
     done < "$result_file"
@@ -8569,23 +8135,10 @@ update_command() {
         # Проверяем .env на устаревшие переменные
         if [ "$has_deprecated_vars" = true ]; then
             echo
-            echo -e "\033[1;33m⚠️  However, deprecated variables detected in .env\033[0m"
+            echo -e "\033[1;33m⚠️  Deprecated variables detected in .env\033[0m"
             read -p "Would you like to clean them up now? (y/n): " -r clean_vars
             if [[ $clean_vars =~ ^[Yy]$ ]]; then
                 migrate_deprecated_env_variables
-            fi
-        fi
-        
-        # Предлагаем принудительный перезапуск
-        echo
-        read -p "Force restart containers anyway? (y/n): " -r force_restart
-        if [[ $force_restart =~ ^[Yy]$ ]]; then
-            echo -e "\033[38;5;250m🔄 Force restarting services...\033[0m"
-            if recreate_remnawave; then
-                echo -e "\033[1;32m✅ Services restarted successfully\033[0m"
-            else
-                echo -e "\033[1;31m❌ Failed to restart services\033[0m"
-                exit 1
             fi
         fi
         
