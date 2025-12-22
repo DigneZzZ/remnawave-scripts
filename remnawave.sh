@@ -6942,6 +6942,11 @@ up_remnawave() {
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans
 }
 
+recreate_remnawave() {
+    # Принудительное пересоздание контейнеров с новыми образами
+    $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --force-recreate --remove-orphans
+}
+
 down_remnawave() {
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" down
 }
@@ -7551,7 +7556,8 @@ is_remnawave_installed() {
 
 is_remnawave_up() {
     detect_compose
-    if [ -z "$($COMPOSE -f $COMPOSE_FILE ps -q -a 2>/dev/null)" ]; then
+    # Проверяем только ЗАПУЩЕННЫЕ контейнеры (без флага -a)
+    if [ -z "$($COMPOSE -f $COMPOSE_FILE ps -q 2>/dev/null)" ]; then
         return 1
     else
         return 0
@@ -8267,6 +8273,234 @@ show_error_logs() {
     echo
     read -p "Press Enter to return to logs menu..."
 }
+# Функция для получения digest локального образа (из RepoDigests)
+get_local_image_digest() {
+    local image="$1"
+    # RepoDigests может содержать несколько digest - возвращаем все через пробел
+    docker inspect --format='{{range .RepoDigests}}{{.}} {{end}}' "$image" 2>/dev/null | grep -o 'sha256:[a-f0-9]*' | tr '\n' ' '
+}
+
+# Быстрое получение remote digest через Registry API v2
+# Возвращает: "digest:method" где method = api|fallback
+get_remote_image_digest_fast() {
+    local full_image="$1"
+    local image="$full_image"
+    local registry=""
+    local repo=""
+    local tag="latest"
+    
+    # Парсим image name
+    if [[ "$image" == *":"* ]]; then
+        tag="${image##*:}"
+        image="${image%:*}"
+    fi
+    
+    # Определяем registry и repo
+    if [[ "$image" == ghcr.io/* ]]; then
+        registry="ghcr.io"
+        repo="${image#ghcr.io/}"
+    elif [[ "$image" == *"/"* ]] && [[ "$image" != *"."* ]]; then
+        # Docker Hub с namespace (user/repo)
+        registry="docker.io"
+        repo="$image"
+    elif [[ "$image" != *"/"* ]]; then
+        # Docker Hub official image (postgres, redis, etc.)
+        registry="docker.io"
+        repo="library/$image"
+    else
+        # Другой registry - fallback на docker manifest
+        local digest=$(docker manifest inspect "$full_image" 2>/dev/null | grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[a-f0-9]*"' | head -1 | grep -o 'sha256:[a-f0-9]*')
+        echo "${digest}:fallback"
+        return
+    fi
+    
+    local digest=""
+    local method="api"
+    local arch=$(uname -m)
+    local platform_arch="amd64"
+    case "$arch" in
+        x86_64|amd64) platform_arch="amd64" ;;
+        aarch64|arm64) platform_arch="arm64" ;;
+    esac
+    
+    if [ "$registry" = "docker.io" ]; then
+        # Docker Hub - нужен token
+        local token=$(curl -s --connect-timeout 3 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull" 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$token" ]; then
+            # Получаем digest из заголовка
+            digest=$(curl -sI --connect-timeout 3 -H "Authorization: Bearer $token" \
+                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                "https://registry-1.docker.io/v2/${repo}/manifests/${tag}" 2>/dev/null | \
+                tr -d '\r' | grep -i "^docker-content-digest:" | awk '{print $2}')
+        fi
+    elif [ "$registry" = "ghcr.io" ]; then
+        # GitHub Container Registry - использует OCI формат
+        local token=$(curl -s --connect-timeout 3 "https://ghcr.io/token?scope=repository:${repo}:pull" 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$token" ]; then
+            # Сначала пробуем получить digest из заголовка с OCI Accept
+            digest=$(curl -sI --connect-timeout 3 -H "Authorization: Bearer $token" \
+                -H "Accept: application/vnd.oci.image.index.v1+json" \
+                -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                "https://ghcr.io/v2/${repo}/manifests/${tag}" 2>/dev/null | \
+                tr -d '\r' | grep -i "^docker-content-digest:" | awk '{print $2}')
+            
+            # Если заголовок пустой - получаем из тела
+            if [ -z "$digest" ]; then
+                local manifest_body=$(curl -s --connect-timeout 3 -H "Authorization: Bearer $token" \
+                    -H "Accept: application/vnd.oci.image.index.v1+json" \
+                    -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+                    "https://ghcr.io/v2/${repo}/manifests/${tag}" 2>/dev/null)
+                
+                # Ищем digest для нашей платформы
+                digest=$(echo "$manifest_body" | grep -B5 "\"architecture\"[[:space:]]*:[[:space:]]*\"$platform_arch\"" | grep -o 'sha256:[a-f0-9]*' | head -1)
+                
+                # Fallback - берём первый digest
+                if [ -z "$digest" ]; then
+                    digest=$(echo "$manifest_body" | grep -o 'sha256:[a-f0-9]*' | head -1)
+                fi
+            fi
+        fi
+    fi
+    
+    # Fallback на docker manifest inspect если API не сработал
+    if [ -z "$digest" ]; then
+        digest=$(docker manifest inspect "$full_image" 2>/dev/null | grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[a-f0-9]*"' | head -1 | grep -o 'sha256:[a-f0-9]*')
+        method="fallback"
+    fi
+    
+    echo "${digest}:${method}"
+}
+
+# Проверка одного образа (для параллельного запуска)
+check_single_image_update() {
+    local image="$1"
+    local result_file="$2"
+    
+    local local_digests=$(get_local_image_digest "$image")
+    local remote_result=$(get_remote_image_digest_fast "$image")
+    local remote_digest="${remote_result%:*}"
+    local method="${remote_result##*:}"
+    
+    # Метка метода проверки
+    local method_label=""
+    if [ "$method" = "api" ]; then
+        method_label="via API"
+    elif [ "$method" = "fallback" ]; then
+        method_label="via manifest"
+    fi
+    
+    if [ -z "$local_digests" ]; then
+        # Образ не найден локально
+        echo "NEW:$image|$method_label" >> "$result_file"
+    elif [ -z "$remote_digest" ]; then
+        # Не удалось получить remote digest - пропускаем
+        echo "SKIP:$image|$method_label" >> "$result_file"
+    elif echo "$local_digests" | grep -q "$remote_digest"; then
+        # Remote digest найден среди локальных - обновлений нет
+        echo "OK:$image|$method_label" >> "$result_file"
+    else
+        # Remote digest не найден среди локальных - есть обновление
+        echo "UPDATE:$image|$method_label" >> "$result_file"
+    fi
+}
+
+# Функция для быстрой ПАРАЛЛЕЛЬНОЙ проверки обновлений образов (без скачивания)
+check_images_for_updates() {
+    local compose_images="$1"
+    local updates_available=false
+    
+    # Создаём временный файл для результатов
+    local result_file=$(mktemp)
+    local pids=""
+    local image_count=0
+    
+    # Запускаем проверки ПАРАЛЛЕЛЬНО
+    while IFS= read -r image; do
+        [ -z "$image" ] && continue
+        check_single_image_update "$image" "$result_file" &
+        pids="$pids $!"
+        image_count=$((image_count + 1))
+    done <<< "$compose_images"
+    
+    # Ждём завершения всех проверок (таймаут 10 секунд на все)
+    local start_time=$(date +%s)
+    local timeout=10
+    
+    while [ -n "$pids" ]; do
+        local still_running=""
+        for pid in $pids; do
+            if kill -0 "$pid" 2>/dev/null; then
+                still_running="$still_running $pid"
+            fi
+        done
+        pids="$still_running"
+        
+        # Проверяем таймаут
+        local now=$(date +%s)
+        if [ $((now - start_time)) -ge $timeout ]; then
+            # Убиваем зависшие процессы (тихо)
+            for pid in $pids; do
+                kill -9 "$pid" 2>/dev/null
+                wait "$pid" 2>/dev/null
+            done
+            echo -e "\033[38;5;244m   ⚠ Timeout checking some images\033[0m"
+            break
+        fi
+        
+        [ -n "$pids" ] && sleep 0.3
+    done
+    
+    # Обрабатываем результаты
+    local updated_list=""
+    local ok_count=0
+    local skip_count=0
+    
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local status="${line%%:*}"
+        local rest="${line#*:}"
+        local img="${rest%%|*}"
+        local method="${rest##*|}"
+        
+        # Форматируем метод для вывода
+        local method_info=""
+        [ -n "$method" ] && method_info=" \033[38;5;240m[$method]\033[0m"
+        
+        case "$status" in
+            UPDATE)
+                updates_available=true
+                updated_list="$updated_list\n   🔄 $img"
+                ;;
+            NEW)
+                updates_available=true
+                updated_list="$updated_list\n   📦 $img (not found locally)"
+                ;;
+            OK)
+                ok_count=$((ok_count + 1))
+                echo -e "\033[38;5;244m   ✓ $img\033[0m$method_info"
+                ;;
+            SKIP)
+                skip_count=$((skip_count + 1))
+                echo -e "\033[38;5;244m   ⚠ $img (check skipped)\033[0m"
+                ;;
+        esac
+    done < "$result_file"
+    
+    # Удаляем временный файл
+    rm -f "$result_file"
+    
+    if [ "$updates_available" = true ]; then
+        echo -e "\033[1;33m📦 Updates available:\033[0m"
+        echo -e "$updated_list"
+        return 0  # Updates available
+    else
+        return 1  # No updates
+    fi
+}
+
 update_command() {
     check_running_as_root
     if ! is_remnawave_installed; then
@@ -8280,12 +8514,10 @@ update_command() {
     echo -e "\033[1;37m🔄 Starting Remnawave Update Check...\033[0m"
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
     
-    # Получаем текущую версию скрипта
+    # === ШАГ 1: Проверка обновлений скрипта ===
     local current_script_version="$SCRIPT_VERSION"
-    
-    # Получаем последнюю версию скрипта с GitHub
     echo -e "\033[38;5;250m📝 Step 1:\033[0m Checking for script updates..."
-    local remote_script_version=$(curl -s "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | cut -d'"' -f2)
+    local remote_script_version=$(curl -s --connect-timeout 5 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | cut -d'"' -f2)
     
     if [ -n "$remote_script_version" ] && [ "$remote_script_version" != "$current_script_version" ]; then
         echo -e "\033[1;33m🔄 Script update available: \033[38;5;15mv$current_script_version\033[0m → \033[1;37mv$remote_script_version\033[0m"
@@ -8299,8 +8531,10 @@ update_command() {
     else
         echo -e "\033[1;32m✅ Script is up to date (v$current_script_version)\033[0m"
     fi
+    
     cd "$APP_DIR" 2>/dev/null || { echo -e "\033[1;31m❌ Cannot access app directory\033[0m"; exit 1; }
 
+    # === ШАГ 2: Получение списка образов ===
     echo -e "\033[38;5;250m📝 Step 2:\033[0m Checking current images..."
     local compose_images=$($COMPOSE -f "$COMPOSE_FILE" config 2>/dev/null | grep "image:" | awk '{print $2}' | sort | uniq)
     
@@ -8309,73 +8543,31 @@ update_command() {
         exit 1
     fi
     
-    echo -e "\033[38;5;244mImages to check:\033[0m"
-    echo "$compose_images" | while read image; do
-        echo -e "\033[38;5;244m   $image\033[0m"
-    done
+    local total_images_count=$(echo "$compose_images" | wc -l | tr -d ' ')
+    echo -e "\033[38;5;244mFound $total_images_count image(s) to check\033[0m"
 
-    echo -e "\033[38;5;250m📝 Step 3:\033[0m Pulling latest images..."
+    # === ШАГ 3: Быстрая проверка обновлений (без скачивания) ===
+    echo -e "\033[38;5;250m📝 Step 3:\033[0m Quick update check (comparing digests)..."
     
-    local pull_output=""
-    local pull_exit_code=0
-
-    pull_output=$($COMPOSE -f "$COMPOSE_FILE" pull 2>&1) || pull_exit_code=$?
-    
-    if [ $pull_exit_code -ne 0 ]; then
-        echo -e "\033[1;31m❌ Failed to pull images:\033[0m"
-        echo -e "\033[38;5;244m$pull_output\033[0m"
-        exit 1
-    fi
-
-    local images_updated=false
-    local update_indicators=""
-
-    if echo "$pull_output" | grep -qi "downloading\|downloaded\|pulling fs layer\|extracting\|pull complete"; then
-        images_updated=true
-        update_indicators="New layers downloaded"
-    fi
-
-    local up_to_date_count=$(echo "$pull_output" | grep -ci "image is up to date\|already exists")
-    local total_images_count=$(echo "$compose_images" | wc -l)
-
-    if [ "$up_to_date_count" -ge "$total_images_count" ] && [ "$total_images_count" -gt 0 ]; then
-        if ! echo "$pull_output" | grep -qi "downloading\|downloaded\|pulling fs layer\|extracting\|pull complete"; then
-            images_updated=false
-        fi
-    fi
-
-    if echo "$pull_output" | grep -qi "digest.*differs\|newer image\|status.*downloaded"; then
-        images_updated=true
-        update_indicators="$update_indicators, Newer versions detected"
+    local images_need_update=false
+    if check_images_for_updates "$compose_images"; then
+        images_need_update=true
     fi
     
-    # Выводим детальную информацию для диагностики
-    echo -e "\033[38;5;244mPull analysis:\033[0m"
-    echo -e "\033[38;5;244m   Images checked: $total_images_count\033[0m"
-    echo -e "\033[38;5;244m   Up-to-date responses: $up_to_date_count\033[0m"
+    # Проверяем устаревшие переменные .env
+    local has_deprecated_vars=false
+    if check_deprecated_env_variables; then
+        has_deprecated_vars=true
+    fi
     
-    # Показываем результат
-    if [ "$images_updated" = true ]; then
-        echo -e "\033[1;32m✅ New image versions available!\033[0m"
-        if [ -n "$update_indicators" ]; then
-            echo -e "\033[38;5;244m   Indicators: $update_indicators\033[0m"
-        fi
-        
-        # Показываем какие образы были обновлены (из вывода pull)
-        local updated_images=$(echo "$pull_output" | grep -i "pulling\|downloaded" | head -3)
-        if [ -n "$updated_images" ]; then
-            echo -e "\033[38;5;244m   Update activity detected\033[0m"
-        fi
-    else
-        echo -e "\033[1;32m✅ All images are already up to date\033[0m"
+    # Если нет обновлений образов
+    if [ "$images_need_update" = false ]; then
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
-        echo -e "\033[1;37m🎉 No updates available!\033[0m"
-        echo -e "\033[38;5;250m🎯 All components are running the latest versions\033[0m"
-        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo -e "\033[1;32m🎉 All images are already up to date!\033[0m"
         
-        # Даже если нет обновлений образов, проверяем .env на устаревшие переменные
-        if check_deprecated_env_variables; then
+        # Проверяем .env на устаревшие переменные
+        if [ "$has_deprecated_vars" = true ]; then
             echo
             echo -e "\033[1;33m⚠️  However, deprecated variables detected in .env\033[0m"
             read -p "Would you like to clean them up now? (y/n): " -r clean_vars
@@ -8384,73 +8576,87 @@ update_command() {
             fi
         fi
         
+        # Предлагаем принудительный перезапуск
+        echo
+        read -p "Force restart containers anyway? (y/n): " -r force_restart
+        if [[ $force_restart =~ ^[Yy]$ ]]; then
+            echo -e "\033[38;5;250m🔄 Force restarting services...\033[0m"
+            if recreate_remnawave; then
+                echo -e "\033[1;32m✅ Services restarted successfully\033[0m"
+            else
+                echo -e "\033[1;31m❌ Failed to restart services\033[0m"
+                exit 1
+            fi
+        fi
+        
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
         exit 0
     fi
     
-    # Проверяем, запущен ли контейнер
-    local was_running=false
-    if is_remnawave_up; then
-        was_running=true
-        echo -e "\033[38;5;250m📝 Step 4:\033[0m Stopping services for update..."
-        if down_remnawave; then
-            echo -e "\033[1;32m✅ Services stopped\033[0m"
-        else
-            echo -e "\033[1;31m❌ Failed to stop services\033[0m"
-            exit 1
-        fi
-    else
-        echo -e "\033[38;5;250m📝 Step 4:\033[0m Services already stopped\033[0m"
+    # === ШАГ 4: Подтверждение и скачивание образов ===
+    echo
+    read -p "Download and apply updates? (Y/n): " -r confirm_update
+    if [[ $confirm_update =~ ^[Nn]$ ]]; then
+        echo -e "\033[1;33m⚠️  Update cancelled by user\033[0m"
+        exit 0
     fi
     
-    # Мигрируем устаревшие переменные окружения перед запуском
+    echo -e "\033[38;5;250m📝 Step 4:\033[0m Downloading new images..."
+    
+    local pull_exit_code=0
+    $COMPOSE -f "$COMPOSE_FILE" pull 2>&1 || pull_exit_code=$?
+    
+    if [ $pull_exit_code -ne 0 ]; then
+        echo -e "\033[1;31m❌ Failed to pull images\033[0m"
+        exit 1
+    fi
+    echo -e "\033[1;32m✅ Images downloaded successfully\033[0m"
+    
+    # === ШАГ 5: Миграция переменных окружения ===
     echo -e "\033[38;5;250m📝 Step 5:\033[0m Checking environment configuration..."
-    migrate_deprecated_env_variables
-    
-    # Запускаем сервисы с новыми образами
-    if [ "$was_running" = true ]; then
-        echo -e "\033[38;5;250m📝 Step 6:\033[0m Starting updated services..."
-        if up_remnawave; then
-            echo -e "\033[1;32m✅ Services started successfully\033[0m"
-            
-            # Проверяем здоровье сервисов после запуска
-            echo -e "\033[38;5;250m🔍 Waiting for services to become healthy...\033[0m"
-            local attempts=0
-            local max_attempts=30
-            
-            while [ $attempts -lt $max_attempts ]; do
-                if is_remnawave_up; then
-                    echo -e "\033[1;32m✅ All services are healthy\033[0m"
-                    break
-                fi
-                
-                sleep 2
-                attempts=$((attempts + 1))
-                
-                if [ $attempts -eq $max_attempts ]; then
-                    echo -e "\033[1;33m⚠️  Services started but may still be initializing\033[0m"
-                    echo -e "\033[38;5;8m   Check status with '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
-                fi
-            done
-        else
-            echo -e "\033[1;31m❌ Failed to start services\033[0m"
-            echo -e "\033[38;5;8m   Check logs with '\033[38;5;15msudo $APP_NAME logs\033[38;5;8m'\033[0m"
-            exit 1
-        fi
+    if [ "$has_deprecated_vars" = true ]; then
+        migrate_deprecated_env_variables
     else
-        echo -e "\033[38;5;250m📝 Step 5:\033[0m Services were not running, skipping startup\033[0m"
-        echo -e "\033[38;5;8m   Run '\033[38;5;15msudo $APP_NAME up\033[38;5;8m' to start when ready\033[0m"
+        echo -e "\033[38;5;244m   Environment is clean\033[0m"
     fi
     
+    # === ШАГ 6: Перезапуск контейнеров с новыми образами ===
+    echo -e "\033[38;5;250m📝 Step 6:\033[0m Recreating containers with new images..."
+    
+    # Используем recreate для принудительного пересоздания контейнеров
+    if recreate_remnawave; then
+        echo -e "\033[1;32m✅ Containers recreated successfully\033[0m"
+    else
+        echo -e "\033[1;31m❌ Failed to recreate containers\033[0m"
+        echo -e "\033[38;5;8m   Check logs with '\033[38;5;15msudo $APP_NAME logs\033[38;5;8m'\033[0m"
+        exit 1
+    fi
+    
+    # === ШАГ 7: Проверка здоровья сервисов ===
+    echo -e "\033[38;5;250m📝 Step 7:\033[0m Waiting for services to become healthy..."
+    local attempts=0
+    local max_attempts=30
+    
+    while [ $attempts -lt $max_attempts ]; do
+        sleep 2
+        if is_remnawave_up; then
+            echo -e "\033[1;32m✅ All services are healthy\033[0m"
+            break
+        fi
+        attempts=$((attempts + 1))
+        
+        if [ $attempts -eq $max_attempts ]; then
+            echo -e "\033[1;33m⚠️  Services started but may still be initializing\033[0m"
+            echo -e "\033[38;5;8m   Check status with '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
+        fi
+    done
+    
+    # === Итог ===
     echo
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
     echo -e "\033[1;37m🎉 Remnawave updated successfully!\033[0m"
-    
-    # Показываем итоговую информацию
-    if [ "$was_running" = true ]; then
-        echo -e "\033[38;5;250m💡 Services are running with latest versions\033[0m"
-        echo -e "\033[38;5;8m   Check status: '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
-    fi
-    
+    echo -e "\033[38;5;250m💡 Services are running with latest versions\033[0m"
+    echo -e "\033[38;5;8m   Check status: '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
 }
 
