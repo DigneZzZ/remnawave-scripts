@@ -7762,7 +7762,7 @@ EOF
     colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
     echo
     colorized_echo blue "📖 Documentation:"
-    echo -e "   \033[1;37mhttps://docs.remnawave.com/docs/install/reverse-proxies/\033[0m"
+    echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
     colorized_echo cyan "==================================================="
 }
 

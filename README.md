@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-3.5.5-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-4.0.2-blue.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
 [![Backup & Restore](https://img.shields.io/badge/Tool-Backup%20%26%20Restore-orange)](#-backup--restore-system)
@@ -90,6 +90,18 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 * OAuth and Branding settings moved to UI
 * Seamless upgrade experience with zero downtime
 
+**🔑 Auto Admin & API Token Creation (v4.0.2+)**
+* Automatic admin credentials generation (10-char login, 24-char password)
+* API token auto-creation for subscription-page
+* Credentials saved to `admin-credentials.txt`
+* Smart detection of fresh install vs override
+
+**📄 Subscription Page v7.0.0+ Support**
+* New `REMNAWAVE_API_TOKEN` configuration
+* Removed deprecated variables: `META_TITLE`, `META_DESCRIPTION`
+* New commands: `subpage`, `subpage-token`, `install-subpage`
+* Interactive subscription page management menu
+
 ---
 
 ### 📦 Quick Start
@@ -149,6 +161,14 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 | `backup` | Create manual backup | `remnawave backup [--no-compress] [--data-only]` |
 | `restore` | Restore from backup | `remnawave restore [--file FILE] [--database-only]` |
 | `schedule` | Manage scheduled backups | `remnawave schedule` |
+
+#### Subscription Page Management
+| Command | Description | Usage |
+|---------|-------------|-------|
+| `subpage` | Subscription page settings menu | `remnawave subpage` |
+| `subpage-token` | Configure API token | `remnawave subpage-token` |
+| `subpage-restart` | Restart subscription-page container | `remnawave subpage-restart` |
+| `install-subpage` | Install subscription-page only | `remnawave install-subpage` |
 
 ---
 
