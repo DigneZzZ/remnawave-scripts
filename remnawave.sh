@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=3.9.12
+# VERSION=4.0.3
 
-SCRIPT_VERSION="3.9.12"
+SCRIPT_VERSION="4.0.3"
 BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6043,6 +6043,459 @@ validate_prefix() {
     return 0
 }
 
+# ===== REMNAWAVE API FUNCTIONS =====
+
+# Get Remnawave panel port from .env or use default
+get_panel_port() {
+    local port="3000"
+    
+    if [ -f "$ENV_FILE" ]; then
+        local env_port=$(grep "^APP_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$env_port" ]; then
+            port="$env_port"
+        fi
+    fi
+    
+    echo "$port"
+}
+
+# Make API request to Remnawave panel
+make_api_request() {
+    local method="$1"
+    local url="$2"
+    local token="$3"
+    local data="$4"
+    
+    local headers=(
+        -H "Content-Type: application/json"
+        -H "X-Forwarded-For: 127.0.0.1"
+        -H "X-Forwarded-Proto: https"
+        -H "X-Remnawave-Client-Type: browser"
+    )
+    
+    if [ -n "$token" ]; then
+        headers+=(-H "Authorization: Bearer $token")
+    fi
+    
+    if [ -n "$data" ]; then
+        curl -s -X "$method" "$url" "${headers[@]}" -d "$data" --max-time 30
+    else
+        curl -s -X "$method" "$url" "${headers[@]}" --max-time 30
+    fi
+}
+
+# Wait for Remnawave API to be ready
+wait_for_api_ready() {
+    local max_attempts="${1:-30}"
+    local panel_port=$(get_panel_port)
+    local domain_url="127.0.0.1:$panel_port"
+    local attempt=0
+    
+    colorized_echo blue "Waiting for Remnawave API to be ready..."
+    
+    while [ $attempt -lt $max_attempts ]; do
+        attempt=$((attempt + 1))
+        
+        if curl -s -f --max-time 10 "http://$domain_url/api/auth/status" \
+            --header 'X-Forwarded-For: 127.0.0.1' \
+            --header 'X-Forwarded-Proto: https' \
+            > /dev/null 2>&1; then
+            colorized_echo green "API is ready!"
+            return 0
+        fi
+        
+        echo -ne "\r\033[38;5;244m   Attempt $attempt/$max_attempts - waiting...\033[0m"
+        sleep 2
+    done
+    
+    echo
+    colorized_echo red "API is not responding after $max_attempts attempts"
+    return 1
+}
+
+# Get admin access token (login or register)
+get_admin_token() {
+    local panel_port=$(get_panel_port)
+    local domain_url="127.0.0.1:$panel_port"
+    local username="$1"
+    local password="$2"
+    
+    # Try to login first
+    local login_response=$(make_api_request "POST" "http://$domain_url/api/auth/login" "" \
+        "{\"username\":\"$username\",\"password\":\"$password\"}")
+    
+    local token=$(echo "$login_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+    
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        echo "$token"
+        return 0
+    fi
+    
+    # If login failed, try to register (first setup)
+    local register_response=$(make_api_request "POST" "http://$domain_url/api/auth/register" "" \
+        "{\"username\":\"$username\",\"password\":\"$password\"}")
+    
+    token=$(echo "$register_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+    
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        echo "$token"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Create API token for subscription-page
+create_subscription_api_token() {
+    local admin_token="$1"
+    local token_name="${2:-subscription-page}"
+    local panel_port=$(get_panel_port)
+    local domain_url="127.0.0.1:$panel_port"
+    
+    local token_data="{\"tokenName\":\"$token_name\"}"
+    local api_response=$(make_api_request "POST" "http://$domain_url/api/tokens" "$admin_token" "$token_data")
+    
+    if [ -z "$api_response" ]; then
+        return 1
+    fi
+    
+    local api_token=$(echo "$api_response" | jq -r '.response.token // ""' 2>/dev/null)
+    
+    if [ -n "$api_token" ] && [ "$api_token" != "null" ]; then
+        echo "$api_token"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Check if subscription-page API token is configured
+check_subpage_token_configured() {
+    if [ ! -f "$SUB_ENV_FILE" ]; then
+        return 1
+    fi
+    
+    local token=$(grep "^REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+    
+    if [ -n "$token" ] && [ "$token" != "" ]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# ===== END REMNAWAVE API FUNCTIONS =====
+
+# ===== SUBSCRIPTION PAGE MANAGEMENT =====
+
+subpage_command() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        colorized_echo red "Remnawave is not installed!"
+        return 1
+    fi
+    
+    subpage_menu
+}
+
+subpage_menu() {
+    while true; do
+        clear
+        echo -e "\033[1;37m📄 Subscription Page Management\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo
+        
+        # Show current status
+        echo -e "\033[1;37m📊 Current Status:\033[0m"
+        
+        # Check if subscription-page container exists
+        local container_status=$(docker ps -a --filter "name=${APP_NAME}-subscription-page" --format "{{.Status}}" 2>/dev/null)
+        if [ -n "$container_status" ]; then
+            if echo "$container_status" | grep -q "Up"; then
+                echo -e "   \033[38;5;15mContainer:\033[0m      \033[1;32m✅ Running\033[0m"
+            else
+                echo -e "   \033[38;5;15mContainer:\033[0m      \033[1;31m❌ Stopped\033[0m"
+            fi
+        else
+            echo -e "   \033[38;5;15mContainer:\033[0m      \033[1;33m⚠️  Not found\033[0m"
+        fi
+        
+        # Check API token status
+        if check_subpage_token_configured; then
+            echo -e "   \033[38;5;15mAPI Token:\033[0m      \033[1;32m✅ Configured\033[0m"
+        else
+            echo -e "   \033[38;5;15mAPI Token:\033[0m      \033[1;31m❌ Not configured\033[0m"
+        fi
+        
+        # Check deprecated variables
+        local deprecated_found=false
+        if [ -f "$SUB_ENV_FILE" ]; then
+            if grep -qE "^(META_TITLE|META_DESCRIPTION|SUBSCRIPTION_UI_DISPLAY_RAW_KEYS)=" "$SUB_ENV_FILE" 2>/dev/null; then
+                deprecated_found=true
+                echo -e "   \033[38;5;15mDeprecated vars:\033[0m \033[1;33m⚠️  Found (migration needed)\033[0m"
+            fi
+        fi
+        
+        echo
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo
+        echo -e "\033[1;37m🔧 Actions:\033[0m"
+        echo -e "   \033[38;5;15m1)\033[0m 🔑 Configure API Token (auto/manual)"
+        echo -e "   \033[38;5;15m2)\033[0m 🔄 Migrate .env.subscription to v7.0.0+"
+        echo -e "   \033[38;5;15m3)\033[0m 🔃 Restart subscription-page container"
+        echo -e "   \033[38;5;15m4)\033[0m 📋 View subscription-page logs"
+        echo -e "   \033[38;5;15m5)\033[0m 📝 Edit .env.subscription"
+        echo
+        echo -e "   \033[38;5;244m0)\033[0m ⬅️  Back to main menu"
+        echo
+        
+        read -p "$(echo -e "\033[1;37mSelect option [0-5]:\033[0m ")" choice
+        
+        case "$choice" in
+            1) subpage_configure_token; read -p "Press Enter to continue..." ;;
+            2) subpage_migrate_env; read -p "Press Enter to continue..." ;;
+            3) subpage_restart; read -p "Press Enter to continue..." ;;
+            4) subpage_logs ;;
+            5) edit_env_sub_command; read -p "Press Enter to continue..." ;;
+            0) return 0 ;;
+            *)
+                echo -e "\033[1;31mInvalid option!\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Configure API token for subscription-page
+subpage_configure_token() {
+    echo
+    echo -e "\033[1;37m🔑 Configure Subscription Page API Token\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    echo
+    
+    # Check if already configured
+    if check_subpage_token_configured; then
+        local existing_token=$(grep "^REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+        echo -e "\033[1;33m⚠️  API Token is already configured!\033[0m"
+        echo -e "\033[38;5;244m   Current token: ${existing_token:0:20}...\033[0m"
+        echo
+        read -p "Replace existing token? (y/N): " -r replace_token
+        if [[ ! $replace_token =~ ^[Yy]$ ]]; then
+            echo -e "\033[38;5;244mKeeping existing token.\033[0m"
+            return 0
+        fi
+    fi
+    
+    # Only manual token configuration (admin creates token in panel UI)
+    echo
+    echo -e "\033[38;5;244mTo get API token:\033[0m"
+    echo -e "\033[38;5;244m  1. Open Remnawave Panel in browser\033[0m"
+    echo -e "\033[38;5;244m  2. Login with admin credentials\033[0m"
+    echo -e "\033[38;5;244m  3. Go to Settings → API Tokens\033[0m"
+    echo -e "\033[38;5;244m  4. Create new token named 'subscription-page'\033[0m"
+    echo -e "\033[38;5;244m  5. Copy the token and paste below\033[0m"
+    echo
+    
+    read -p "Paste API token: " -r api_token
+    
+    if [ -z "$api_token" ]; then
+        colorized_echo red "Token cannot be empty!"
+        return 1
+    fi
+    
+    # Basic validation
+    if [ ${#api_token} -lt 20 ]; then
+        colorized_echo red "Token seems too short. Please check and try again."
+        return 1
+    fi
+    
+    subpage_save_token "$api_token"
+}
+
+# Manual token configuration (legacy wrapper)
+subpage_configure_token_manual() {
+    subpage_configure_token
+}
+
+# Save API token to .env.subscription
+subpage_save_token() {
+    local api_token="$1"
+    
+    if [ ! -f "$SUB_ENV_FILE" ]; then
+        colorized_echo red ".env.subscription file not found!"
+        return 1
+    fi
+    
+    # Backup current file
+    cp "$SUB_ENV_FILE" "${SUB_ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Check if REMNAWAVE_API_TOKEN line exists
+    if grep -q "^#*REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE"; then
+        # Replace existing line (commented or not)
+        sed -i "s|^#*REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_token|" "$SUB_ENV_FILE"
+    else
+        # Add new line after CUSTOM_SUB_PREFIX
+        sed -i "/^CUSTOM_SUB_PREFIX=/a\\
+REMNAWAVE_API_TOKEN=$api_token" "$SUB_ENV_FILE"
+    fi
+    
+    colorized_echo green "✅ API token saved to .env.subscription"
+    echo
+    
+    # Ask to restart container
+    read -p "Restart subscription-page container now? (Y/n): " -r restart_now
+    if [[ ! $restart_now =~ ^[Nn]$ ]]; then
+        subpage_restart
+    fi
+}
+
+# Migrate .env.subscription to v7.0.0+
+subpage_migrate_env() {
+    echo
+    echo -e "\033[1;37m🔄 Migrate .env.subscription to v7.0.0+\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    echo
+    
+    if [ ! -f "$SUB_ENV_FILE" ]; then
+        colorized_echo red ".env.subscription file not found!"
+        return 1
+    fi
+    
+    local changes_made=false
+    local deprecated_vars=("META_TITLE" "META_DESCRIPTION" "SUBSCRIPTION_UI_DISPLAY_RAW_KEYS")
+    local found_vars=()
+    
+    # Check for deprecated variables
+    for var in "${deprecated_vars[@]}"; do
+        if grep -q "^$var=" "$SUB_ENV_FILE" 2>/dev/null; then
+            found_vars+=("$var")
+        fi
+    done
+    
+    if [ ${#found_vars[@]} -eq 0 ]; then
+        colorized_echo green "✅ No deprecated variables found!"
+        echo -e "\033[38;5;244m.env.subscription is already compatible with v7.0.0+\033[0m"
+        
+        # Check if API token is missing
+        if ! check_subpage_token_configured; then
+            echo
+            colorized_echo yellow "⚠️  However, REMNAWAVE_API_TOKEN is not configured!"
+            colorized_echo yellow "This is REQUIRED for subscription-page v7.0.0+"
+            read -p "Configure API token now? (Y/n): " -r configure_now
+            if [[ ! $configure_now =~ ^[Nn]$ ]]; then
+                subpage_configure_token
+            fi
+        fi
+        return 0
+    fi
+    
+    echo -e "\033[1;33m⚠️  Found deprecated variables:\033[0m"
+    for var in "${found_vars[@]}"; do
+        local value=$(grep "^$var=" "$SUB_ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+        echo -e "   \033[38;5;244m$var\033[0m = \033[38;5;250m${value:0:40}\033[0m"
+    done
+    echo
+    echo -e "\033[38;5;244mThese settings are now managed through the Panel UI\033[0m"
+    echo -e "\033[38;5;244m(Settings → Subscription Page)\033[0m"
+    echo
+    
+    read -p "Remove deprecated variables? (Y/n): " -r confirm_remove
+    if [[ $confirm_remove =~ ^[Nn]$ ]]; then
+        colorized_echo yellow "Migration cancelled."
+        return 0
+    fi
+    
+    # Backup current file
+    local backup_file="${SUB_ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$SUB_ENV_FILE" "$backup_file"
+    colorized_echo green "Backup created: $(basename $backup_file)"
+    
+    # Remove deprecated variables
+    for var in "${found_vars[@]}"; do
+        sed -i "/^$var=/d" "$SUB_ENV_FILE"
+        colorized_echo green "   Removed: $var"
+    done
+    
+    # Remove empty comment sections related to META
+    sed -i '/^### META FOR SUBSCRIPTION PAGE ###$/d' "$SUB_ENV_FILE"
+    sed -i '/^### RAW LINKS ###$/d' "$SUB_ENV_FILE"
+    
+    echo
+    colorized_echo green "✅ Migration completed!"
+    
+    # Check if API token is missing
+    if ! check_subpage_token_configured; then
+        echo
+        colorized_echo yellow "⚠️  REMNAWAVE_API_TOKEN is not configured!"
+        colorized_echo yellow "This is REQUIRED for subscription-page v7.0.0+"
+        read -p "Configure API token now? (Y/n): " -r configure_now
+        if [[ ! $configure_now =~ ^[Nn]$ ]]; then
+            subpage_configure_token
+        fi
+    else
+        # Ask to restart
+        read -p "Restart subscription-page container? (Y/n): " -r restart_now
+        if [[ ! $restart_now =~ ^[Nn]$ ]]; then
+            subpage_restart
+        fi
+    fi
+}
+
+# Restart subscription-page container
+subpage_restart() {
+    echo
+    colorized_echo blue "Restarting subscription-page container..."
+    
+    detect_compose
+    cd "$APP_DIR" 2>/dev/null || {
+        colorized_echo red "Cannot access $APP_DIR"
+        return 1
+    }
+    
+    # Stop and recreate
+    $COMPOSE -f "$COMPOSE_FILE" stop ${APP_NAME}-subscription-page 2>/dev/null
+    $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        colorized_echo green "✅ subscription-page container restarted!"
+        
+        # Show status
+        sleep 2
+        local status=$(docker ps --filter "name=${APP_NAME}-subscription-page" --format "{{.Status}}" 2>/dev/null)
+        echo -e "\033[38;5;244m   Status: $status\033[0m"
+    else
+        colorized_echo red "Failed to restart container!"
+        return 1
+    fi
+}
+
+# View subscription-page logs
+subpage_logs() {
+    detect_compose
+    cd "$APP_DIR" 2>/dev/null || {
+        colorized_echo red "Cannot access $APP_DIR"
+        read -p "Press Enter to continue..."
+        return 1
+    }
+    
+    echo -e "\033[1;37m📋 Subscription Page Logs\033[0m"
+    echo -e "\033[38;5;244mPress Ctrl+C to exit\033[0m"
+    echo
+    
+    $COMPOSE -f "$COMPOSE_FILE" logs -f --tail=100 ${APP_NAME}-subscription-page
+}
+
+# Quick restart command for CLI
+subpage_restart_command() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        colorized_echo red "Remnawave is not installed!"
+        return 1
+    fi
+    
+    subpage_restart
+}
+
+# ===== END SUBSCRIPTION PAGE MANAGEMENT =====
+
 install_remnawave() {
     mkdir -p "$APP_DIR"
 
@@ -6290,13 +6743,6 @@ WEBHOOK_URL=https://webhook.site/1234567890
 ### This secret is used to sign the webhook payload, must be exact 64 characters. Only a-z, 0-9, A-Z are allowed.
 WEBHOOK_SECRET_HEADER=vsmu67Kmg6R8FjIOF1WUY8LWBHie4scdEqrfsKmyf4IAf8dY3nFS0wwYHkhh6ZvQ
 
-### HWID DEVICE DETECTION AND LIMITATION ###
-# Don't enable this if you don't know what you are doing.
-# Review documentation before enabling this feature.
-# https://remna.st/docs/features/hwid-device-limit/
-HWID_DEVICE_LIMIT_ENABLED=false
-HWID_FALLBACK_DEVICE_LIMIT=10
-HWID_MAX_DEVICES_ANNOUNCE="You have reached the maximum number of devices for your subscription."
 
 ### Bandwidth usage reached notifications
 BANDWIDTH_USAGE_NOTIFICATIONS_ENABLED=false
@@ -7149,6 +7595,8 @@ warn_already_installed() {
 
 install_command() {
     check_running_as_root
+    local is_override=false
+    
     if is_remnawave_installed; then
         warn_already_installed
         read -r -p "Do you want to override the previous installation? (y/n) "
@@ -7156,6 +7604,7 @@ install_command() {
             colorized_echo red "Aborted installation"
             exit 1
         fi
+        is_override=true
     fi
     detect_os
     if ! command -v curl >/dev/null 2>&1; then
@@ -7186,6 +7635,135 @@ install_command() {
     colorized_echo yellow "Panel domain: $FRONT_END_DOMAIN -> 127.0.0.1:$APP_PORT"
     colorized_echo yellow "Subscription domain: $SUB_DOMAIN -> 127.0.0.1:$SUB_PAGE_PORT"
     colorized_echo green "==================================================="
+    
+    # Configure admin account and API token
+    echo
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "📄 Admin Account & API Token Configuration"
+    colorized_echo cyan "==================================================="
+    
+    if [ "$is_override" = true ]; then
+        # Override installation - admin already exists
+        colorized_echo yellow "This is an override installation."
+        colorized_echo yellow "Admin account already exists - cannot create automatically."
+        echo
+        colorized_echo blue "To configure subscription-page API token:"
+        echo -e "   \033[38;5;244m1. Login to Remnawave Panel\033[0m"
+        echo -e "   \033[38;5;244m2. Go to Settings → API Tokens\033[0m"
+        echo -e "   \033[38;5;244m3. Create token named 'subscription-page'\033[0m"
+        echo -e "   \033[38;5;244m4. Run: $APP_NAME subpage\033[0m"
+        echo
+        colorized_echo yellow "Configure API token later: $APP_NAME subpage"
+    else
+        # Fresh installation - create admin and token
+        colorized_echo yellow "Subscription-page v7.0.0+ requires REMNAWAVE_API_TOKEN"
+        colorized_echo yellow "to communicate with the panel."
+        echo
+        colorized_echo blue "Creating admin account and API token automatically..."
+        echo
+        
+        # Wait for panel to be fully ready
+        if wait_for_api_ready 30; then
+            echo
+            colorized_echo green "Panel is ready!"
+            echo
+            
+            # Generate admin credentials automatically
+            # Username: 10 chars (letters and digits)
+            local admin_username=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+            # Password: 24 chars (letters, digits, and safe symbols)
+            local admin_password=$(tr -dc 'a-zA-Z0-9!@#$%^&*()_+-=' < /dev/urandom | head -c 24)
+            
+            colorized_echo blue "Generated admin credentials:"
+            echo -e "   \033[1;37mUsername:\033[0m \033[1;32m$admin_username\033[0m"
+            echo -e "   \033[1;37mPassword:\033[0m \033[1;32m$admin_password\033[0m"
+            echo
+            colorized_echo blue "Creating admin account and API token..."
+            
+            local admin_token=$(get_admin_token "$admin_username" "$admin_password")
+            
+            if [ -n "$admin_token" ]; then
+                colorized_echo green "✅ Admin account created successfully!"
+                
+                # Save credentials to file
+                local credentials_file="$APP_DIR/admin-credentials.txt"
+                cat > "$credentials_file" << EOF
+========================================
+  REMNAWAVE ADMIN CREDENTIALS
+========================================
+  Created: $(date '+%Y-%m-%d %H:%M:%S')
+  
+  Username: $admin_username
+  Password: $admin_password
+  
+  
+  
+  ⚠️  IMPORTANT: Keep this file secure!
+  Delete after memorizing credentials.
+========================================
+EOF
+                chmod 600 "$credentials_file"
+                colorized_echo green "✅ Credentials saved to: $credentials_file"
+                
+                # Create subscription-page API token
+                colorized_echo blue "Creating API token for subscription-page..."
+                local api_token=$(create_subscription_api_token "$admin_token" "subscription-page")
+                
+                if [ -n "$api_token" ]; then
+                    # Save token to .env.subscription
+                    if grep -q "^#*REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null; then
+                        sed -i "s|^#*REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_token|" "$SUB_ENV_FILE"
+                    else
+                        echo "REMNAWAVE_API_TOKEN=$api_token" >> "$SUB_ENV_FILE"
+                    fi
+                    
+                    colorized_echo green "✅ API token created and saved!"
+                    
+                    # Recreate subscription-page container to apply token
+                    colorized_echo blue "Starting subscription-page with API token..."
+                    $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page 2>/dev/null
+                    colorized_echo green "✅ Subscription-page started with API token!"
+                else
+                    colorized_echo yellow "⚠️  Could not create API token automatically."
+                    colorized_echo yellow "You can configure it later: $APP_NAME subpage"
+                fi
+                
+                # Display credentials summary
+                echo
+                colorized_echo cyan "==================================================="
+                colorized_echo cyan "🔐 YOUR ADMIN CREDENTIALS"
+                colorized_echo cyan "==================================================="
+                echo -e "\033[1;37m   Username:\033[0m \033[1;32m$admin_username\033[0m"
+                echo -e "\033[1;37m   Password:\033[0m \033[1;32m$admin_password\033[0m"
+                colorized_echo cyan "==================================================="
+                colorized_echo yellow "⚠️  Save these credentials! They are also stored in:"
+                colorized_echo yellow "   $credentials_file"
+                colorized_echo cyan "==================================================="
+            else
+                colorized_echo red "❌ Failed to create admin account!"
+                colorized_echo yellow "You can register manually at: http://127.0.0.1:$APP_PORT"
+                colorized_echo yellow "Then configure API token: $APP_NAME subpage"
+            fi
+        else
+            colorized_echo yellow "Panel is not responding yet."
+            colorized_echo yellow "After panel starts, register admin at: http://127.0.0.1:$APP_PORT"
+            colorized_echo yellow "Then configure API token: $APP_NAME subpage"
+        fi
+    fi
+    
+    colorized_echo green "==================================================="
+    colorized_echo green "Installation complete!"
+    colorized_echo green "==================================================="
+    echo
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "🌐 NEXT STEP: Configure Reverse Proxy"
+    colorized_echo cyan "==================================================="
+    colorized_echo yellow "To access the panel from the internet, you need to"
+    colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
+    echo
+    colorized_echo blue "📖 Documentation:"
+    echo -e "   \033[1;37mhttps://docs.remnawave.com/docs/install/reverse-proxies/\033[0m"
+    colorized_echo cyan "==================================================="
 }
 
 uninstall_command() {
@@ -7215,6 +7793,95 @@ uninstall_command() {
     fi
 
     colorized_echo green "Remnawave uninstalled successfully"
+}
+
+install_subpage_command() {
+    check_running_as_root
+    
+    # Help message
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo -e "\033[1;37m📄 install-subpage\033[0m - Install subscription-page container only"
+        echo
+        echo -e "\033[1;37mDescription:\033[0m"
+        echo -e "  Adds subscription-page container to existing Remnawave installation."
+        echo -e "  Use when panel is already installed but subscription-page was removed"
+        echo -e "  or needs to be reinstalled."
+        echo
+        echo -e "\033[1;37mUsage:\033[0m"
+        echo -e "  \033[38;5;15m$APP_NAME\033[0m \033[38;5;250minstall-subpage\033[0m"
+        echo
+        echo -e "\033[1;37mAfter installation:\033[0m"
+        echo -e "  Configure API token: \033[38;5;15m$APP_NAME\033[0m subpage"
+        echo
+        exit 0
+    fi
+    
+    if ! is_remnawave_installed; then
+        colorized_echo red "Remnawave panel is not installed!"
+        colorized_echo yellow "First install the full panel: $APP_NAME install"
+        exit 1
+    fi
+    
+    detect_compose
+    
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "📄 Install Subscription-Page Container"
+    colorized_echo cyan "==================================================="
+    echo
+    
+    # Check if subscription-page service exists in compose
+    if ! grep -q "${APP_NAME}-subscription-page:" "$COMPOSE_FILE" 2>/dev/null; then
+        colorized_echo red "Subscription-page service not found in docker-compose.yml"
+        colorized_echo yellow "This may require reinstalling: $APP_NAME install"
+        exit 1
+    fi
+    
+    # Check if .env.subscription exists
+    if [ ! -f "$SUB_ENV_FILE" ]; then
+        colorized_echo yellow "Creating $SUB_ENV_FILE..."
+        
+        # Get current panel URL from .env
+        local sub_public_url=$(grep "^SUB_PUBLIC_URL=" "$ENV_FILE" 2>/dev/null | cut -d '=' -f2)
+        if [ -z "$sub_public_url" ]; then
+            read -p "Enter subscription page public URL (e.g., https://sub.domain.com): " -r sub_public_url
+        fi
+        
+        # Create .env.subscription
+        cat > "$SUB_ENV_FILE" << EOF
+# Subscription Page Configuration
+# Created by install-subpage command
+
+# API Token - Get from Remnawave Panel → Settings → API Tokens
+REMNAWAVE_API_TOKEN=
+
+# Subscription Page Public URL
+SUB_PUBLIC_URL=$sub_public_url
+EOF
+        colorized_echo green "✅ Created $SUB_ENV_FILE"
+    else
+        colorized_echo green "✅ $SUB_ENV_FILE already exists"
+    fi
+    
+    # Pull and start subscription-page container
+    colorized_echo blue "Pulling subscription-page image..."
+    $COMPOSE -f "$COMPOSE_FILE" pull ${APP_NAME}-subscription-page
+    
+    colorized_echo blue "Starting subscription-page container..."
+    $COMPOSE -f "$COMPOSE_FILE" up -d ${APP_NAME}-subscription-page
+    
+    colorized_echo green "==================================================="
+    colorized_echo green "✅ Subscription-page container installed!"
+    colorized_echo green "==================================================="
+    echo
+    colorized_echo yellow "⚠️  IMPORTANT: Configure API token to enable functionality"
+    echo
+    colorized_echo blue "Steps:"
+    echo -e "   \033[38;5;244m1. Login to Remnawave Panel\033[0m"
+    echo -e "   \033[38;5;244m2. Go to Settings → API Tokens\033[0m"
+    echo -e "   \033[38;5;244m3. Create token named 'subscription-page'\033[0m"
+    echo -e "   \033[38;5;244m4. Run: $APP_NAME subpage\033[0m"
+    echo
+    colorized_echo yellow "Or directly configure: $APP_NAME subpage-token"
 }
 
 up_command() {
@@ -8439,16 +9106,17 @@ main_menu() {
         echo -e "   \033[38;5;15m13)\033[0m 🔄 Restore from backup"
         echo
         echo -e "\033[1;37m🔧 Configuration & Access:\033[0m"
-        echo -e "   \033[38;5;15m14)\033[0m 📝 Edit configuration files"
-        echo -e "   \033[38;5;15m15)\033[0m 🖥️  Access container shell"
-        echo -e "   \033[38;5;15m16)\033[0m 📊 PM2 process monitor"
+        echo -e "   \033[38;5;15m14)\033[0m 📄 Subscription Page settings"
+        echo -e "   \033[38;5;15m15)\033[0m 📝 Edit configuration files"
+        echo -e "   \033[38;5;15m16)\033[0m 🖥️  Access container shell"
+        echo -e "   \033[38;5;15m17)\033[0m 📊 PM2 process monitor"
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
         echo -e "\033[38;5;15m   0)\033[0m 🚪 Exit to terminal"
         echo
         echo -e "\033[38;5;8mRemnawave Panel CLI v$SCRIPT_VERSION by DigneZzZ • gig.ovh\033[0m"
         echo
-        read -p "$(echo -e "\033[1;37mSelect option [0-16]:\033[0m ")" choice
+        read -p "$(echo -e "\033[1;37mSelect option [0-17]:\033[0m ")" choice
 
         case "$choice" in
             1) install_command; read -p "Press Enter to continue..." ;;
@@ -8464,9 +9132,10 @@ main_menu() {
             11) backup_command; read -p "Press Enter to continue..." ;;
             12) schedule_menu ;;
             13) restore_command; read -p "Press Enter to continue..." ;;  
-            14) edit_command_menu ;;  
-            15) console_command ;;
-            16) pm2_monitor ;;
+            14) subpage_menu ;;  
+            15) edit_command_menu ;;  
+            16) console_command ;;
+            17) pm2_monitor ;;
             0) clear; exit 0 ;;
             *) 
                 echo -e "\033[1;31mInvalid option!\033[0m"
@@ -8534,6 +9203,10 @@ usage() {
     echo
 
     echo -e "\033[1;37m🔧 Configuration & Access:\033[0m"
+    printf "   \033[38;5;117m%-18s\033[0m %s\n" "subpage" "📄 Subscription page settings"
+    printf "   \033[38;5;117m%-18s\033[0m %s\n" "subpage-restart" "🔃 Quick restart subscription-page"
+    printf "   \033[38;5;117m%-18s\033[0m %s\n" "subpage-token" "🔑 Configure API token"
+    printf "   \033[38;5;117m%-18s\033[0m %s\n" "install-subpage" "📦 Install subscription-page only"
     printf "   \033[38;5;117m%-18s\033[0m %s\n" "edit" "📝 Edit docker-compose.yml"
     printf "   \033[38;5;117m%-18s\033[0m %s\n" "edit-env" "⚙️  Edit environment variables"
     printf "   \033[38;5;117m%-18s\033[0m %s\n" "edit-env-sub" "⚙️  Edit subscription environment variables"
@@ -8802,6 +9475,7 @@ smart_usage() {
 
 case "$COMMAND" in
     install) install_command ;;
+    install-subpage) install_subpage_command "$@" ;;
     update) update_command ;;
     uninstall) uninstall_command ;;
     up) up_command ;;
@@ -8820,7 +9494,10 @@ case "$COMMAND" in
     console) console_command ;;
     pm2-monitor) pm2_monitor ;;
     backup) backup_command "$@" ;;
-    restore) restore_command "$@" ;; 
+    restore) restore_command "$@" ;;
+    subpage) subpage_command ;;
+    subpage-restart) subpage_restart_command ;;
+    subpage-token) subpage_configure_token ;;
     menu) main_menu ;;  
     help) smart_usage "help" "$1" ;;
     --version|-v) show_version ;;
