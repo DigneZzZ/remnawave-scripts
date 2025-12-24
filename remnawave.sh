@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=4.0.4
+# VERSION=4.0.8
 
-SCRIPT_VERSION="4.0.5"
+SCRIPT_VERSION="5.0.0"
 BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6031,6 +6031,10 @@ validate_domain() {
     if [[ "$domain" == */* ]] || [[ "$domain" == *\ * ]]; then
         return 1
     fi
+    # Check if domain format is valid
+    if ! [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 1
+    fi
     return 0
 }
 
@@ -6041,6 +6045,1293 @@ validate_prefix() {
         return 1
     fi
     return 0
+}
+
+# Validate domain DNS configuration
+validate_domain_dns() {
+    local domain="$1"
+    local server_ip="${NODE_IP:-127.0.0.1}"
+    local is_optional="${2:-false}"  # If true, skip validation for wildcard domains
+    
+    # Skip for wildcard domain
+    if [[ "$domain" == "*" ]]; then
+        return 0
+    fi
+    
+    echo
+    colorized_echo white "🔍 Validating DNS Configuration for: $domain"
+    echo "───────────────────────────────────────"
+    echo
+    
+    printf "   %-15s %s\n" "Domain:" "$domain"
+    printf "   %-15s %s\n" "Server IP:" "$server_ip"
+    echo
+    
+    # Check if dig is available
+    if ! command -v dig >/dev/null 2>&1; then
+        colorized_echo yellow "⚠️  Installing dig utility..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1
+            apt-get install -y dnsutils >/dev/null 2>&1
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y bind-utils >/dev/null 2>&1
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y bind-utils >/dev/null 2>&1
+        else
+            colorized_echo yellow "⚠️  Cannot install dig utility, skipping DNS validation"
+            return 0
+        fi
+        
+        if ! command -v dig >/dev/null 2>&1; then
+            colorized_echo yellow "⚠️  Failed to install dig utility, skipping DNS validation"
+            return 0
+        fi
+        colorized_echo green "✅ dig utility installed"
+        echo
+    fi
+    
+    # Initialize dns_match to false
+    local dns_match="false"
+    
+    # A record check
+    colorized_echo gray "   Checking A record..."
+    local a_records=$(dig +short A "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    
+    if [ -z "$a_records" ]; then
+        colorized_echo red "   ❌ No A record found"
+    else
+        colorized_echo green "   ✅ A record found:"
+        while IFS= read -r ip; do
+            echo "      → $ip"
+            if [ "$ip" = "$server_ip" ]; then
+                dns_match="true"
+            fi
+        done <<< "$a_records"
+    fi
+    
+    # AAAA record check (IPv6)
+    colorized_echo gray "   Checking AAAA record..."
+    local aaaa_records=$(dig +short AAAA "$domain" 2>/dev/null)
+    
+    if [ -z "$aaaa_records" ]; then
+        colorized_echo gray "   ℹ️  No AAAA record found (IPv6)"
+    else
+        colorized_echo green "   ✅ AAAA record found:"
+        while IFS= read -r ip; do
+            echo "      → $ip"
+        done <<< "$aaaa_records"
+    fi
+    
+    # CNAME record check
+    colorized_echo gray "   Checking CNAME record..."
+    local cname_record=$(dig +short CNAME "$domain" 2>/dev/null)
+    
+    if [ -n "$cname_record" ]; then
+        colorized_echo green "   ✅ CNAME record found:"
+        echo "      → $cname_record"
+        
+        # Check CNAME target
+        colorized_echo gray "   Resolving CNAME target..."
+        local cname_a_records=$(dig +short A "$cname_record" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        
+        if [ -n "$cname_a_records" ]; then
+            colorized_echo green "   ✅ CNAME target resolved:"
+            while IFS= read -r ip; do
+                echo "      → $ip"
+                if [ "$ip" = "$server_ip" ]; then
+                    dns_match="true"
+                fi
+            done <<< "$cname_a_records"
+        fi
+    else
+        colorized_echo gray "   ℹ️  No CNAME record found"
+    fi
+    
+    echo
+    
+    # DNS propagation check with multiple servers
+    colorized_echo white "🌐 Checking DNS Propagation:"
+    echo
+    
+    local dns_servers=("8.8.8.8" "1.1.1.1" "208.67.222.222" "9.9.9.9")
+    local propagation_count=0
+    
+    for dns_server in "${dns_servers[@]}"; do
+        echo -n "   Checking via $dns_server... "
+        local remote_a=$(dig @"$dns_server" +short A "$domain" 2>/dev/null | head -1)
+        
+        if [ -n "$remote_a" ] && [[ "$remote_a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if [ "$remote_a" = "$server_ip" ]; then
+                colorized_echo green "✅ $remote_a (matches server)"
+                ((propagation_count++))
+            else
+                colorized_echo yellow "⚠️  $remote_a (different IP)"
+            fi
+        else
+            colorized_echo red "❌ No response"
+        fi
+    done
+    
+    echo
+    
+    # Summary and recommendations
+    colorized_echo white "📋 DNS Validation Summary:"
+    echo "───────────────────────────────────────"
+    
+    if [ "$dns_match" = "true" ]; then
+        colorized_echo green "✅ Domain correctly points to this server"
+        colorized_echo green "✅ DNS propagation: $propagation_count/4 servers"
+        
+        if [ "$propagation_count" -ge 2 ]; then
+            colorized_echo green "✅ DNS propagation looks good"
+            echo
+            return 0
+        else
+            colorized_echo yellow "⚠️  DNS propagation is limited"
+            echo "   This might cause issues with SSL certificates"
+        fi
+    else
+        colorized_echo red "❌ Domain does not point to this server"
+        echo "   Expected IP: $server_ip"
+        
+        if [ -n "$a_records" ]; then
+            echo "   Current IPs: $(echo "$a_records" | tr '\n' ' ')"
+        fi
+    fi
+    
+    echo
+    colorized_echo white "🔧 What you need to do:"
+    echo "   • Go to your DNS provider (Cloudflare, etc.)"
+    echo "   • Add A record: $domain → $server_ip"
+    echo "   • Wait for DNS propagation (usually 5-15 minutes)"
+    echo
+    
+    # Ask user decision
+    if [ "$dns_match" = "true" ] && [ "$propagation_count" -ge 2 ]; then
+        colorized_echo green "🎉 DNS validation passed!"
+        echo
+        return 0
+    else
+        colorized_echo yellow "⚠️  DNS validation has warnings."
+        echo
+        read -p "Do you want to continue anyway? [y/N]: " -r continue_anyway
+        
+        if [[ $continue_anyway =~ ^[Yy]$ ]]; then
+            colorized_echo yellow "⚠️  Continuing despite DNS issues..."
+            echo
+            return 0
+        else
+            colorized_echo gray "Please fix DNS configuration and try again."
+            return 1
+        fi
+    fi
+}
+
+# ===== CADDY REVERSE PROXY FUNCTIONS =====
+
+CADDY_DIR="/opt/caddy-remnawave"
+CADDY_VERSION="2.10.2"
+
+# Check if web server is already installed
+check_existing_webserver() {
+    local found_webserver=""
+    
+    # Check for Nginx service
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        found_webserver="nginx (systemd service)"
+    fi
+    
+    # Check for Apache service
+    if systemctl is-active --quiet apache2 2>/dev/null || systemctl is-active --quiet httpd 2>/dev/null; then
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, apache"
+        else
+            found_webserver="apache (systemd service)"
+        fi
+    fi
+    
+    # Check for Caddy service
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, caddy"
+        else
+            found_webserver="caddy (systemd service)"
+        fi
+    fi
+    
+    # Check for nginx docker containers
+    local nginx_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "nginx|openresty" || true)
+    if [ -n "$nginx_containers" ]; then
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, nginx docker ($nginx_containers)"
+        else
+            found_webserver="nginx docker ($nginx_containers)"
+        fi
+    fi
+    
+    # Check for caddy docker containers
+    local caddy_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "caddy" || true)
+    if [ -n "$caddy_containers" ]; then
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, caddy docker ($caddy_containers)"
+        else
+            found_webserver="caddy docker ($caddy_containers)"
+        fi
+    fi
+    
+    # Check for traefik docker containers
+    local traefik_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "traefik" || true)
+    if [ -n "$traefik_containers" ]; then
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, traefik docker ($traefik_containers)"
+        else
+            found_webserver="traefik docker ($traefik_containers)"
+        fi
+    fi
+    
+    # Check if port 80 or 443 is in use
+    local port80_in_use=""
+    local port443_in_use=""
+    
+    if command -v ss >/dev/null 2>&1; then
+        port80_in_use=$(ss -tlnp 2>/dev/null | grep ":80 " | head -1 || true)
+        port443_in_use=$(ss -tlnp 2>/dev/null | grep ":443 " | head -1 || true)
+    elif command -v netstat >/dev/null 2>&1; then
+        port80_in_use=$(netstat -tlnp 2>/dev/null | grep ":80 " | head -1 || true)
+        port443_in_use=$(netstat -tlnp 2>/dev/null | grep ":443 " | head -1 || true)
+    fi
+    
+    if [ -n "$found_webserver" ]; then
+        echo "$found_webserver"
+        return 0
+    fi
+    
+    if [ -n "$port80_in_use" ] || [ -n "$port443_in_use" ]; then
+        echo "port_in_use"
+        return 0
+    fi
+    
+    echo ""
+    return 0
+}
+
+# Check if Caddy for Remnawave is already installed
+is_caddy_installed() {
+    if [ -d "$CADDY_DIR" ] && [ -f "$CADDY_DIR/docker-compose.yml" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Check if Caddy is running
+is_caddy_up() {
+    if ! is_caddy_installed; then
+        return 1
+    fi
+    local running=$(docker ps --filter "name=caddy-remnawave" --format '{{.Names}}' 2>/dev/null | head -1)
+    if [ -n "$running" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Check firewall ports for Caddy (UFW/firewalld)
+check_firewall_ports() {
+    local ports_ok=true
+    local warnings=""
+    
+    # Check UFW
+    if command -v ufw >/dev/null 2>&1; then
+        local ufw_status=$(ufw status 2>/dev/null | head -1)
+        if [[ "$ufw_status" == *"active"* ]]; then
+            local port80_open=$(ufw status 2>/dev/null | grep -E "^80[/ ]" || true)
+            local port443_open=$(ufw status 2>/dev/null | grep -E "^443[/ ]" || true)
+            local http_open=$(ufw status 2>/dev/null | grep -E "^HTTP|^Nginx|^Apache|^WWW" || true)
+            
+            if [ -z "$port80_open" ] && [ -z "$http_open" ]; then
+                warnings="${warnings}   • Port 80 (HTTP) - not open in UFW\n"
+                ports_ok=false
+            fi
+            if [ -z "$port443_open" ] && [ -z "$http_open" ]; then
+                warnings="${warnings}   • Port 443 (HTTPS) - not open in UFW\n"
+                ports_ok=false
+            fi
+            
+            if [ "$ports_ok" = false ]; then
+                echo -e "\033[1;33m⚠️  UFW firewall is active but required ports may be closed:\033[0m"
+                echo -e "\033[38;5;244m$warnings\033[0m"
+                echo -e "\033[38;5;250m   Run these commands to open ports:\033[0m"
+                echo -e "\033[38;5;15m   sudo ufw allow 80/tcp\033[0m"
+                echo -e "\033[38;5;15m   sudo ufw allow 443/tcp\033[0m"
+                echo
+                return 1
+            fi
+        fi
+    fi
+    
+    # Check firewalld
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        local firewalld_running=$(firewall-cmd --state 2>/dev/null || true)
+        if [ "$firewalld_running" = "running" ]; then
+            local http_open=$(firewall-cmd --query-service=http 2>/dev/null || echo "no")
+            local https_open=$(firewall-cmd --query-service=https 2>/dev/null || echo "no")
+            
+            if [ "$http_open" != "yes" ]; then
+                warnings="${warnings}   • HTTP service - not open in firewalld\n"
+                ports_ok=false
+            fi
+            if [ "$https_open" != "yes" ]; then
+                warnings="${warnings}   • HTTPS service - not open in firewalld\n"
+                ports_ok=false
+            fi
+            
+            if [ "$ports_ok" = false ]; then
+                echo -e "\033[1;33m⚠️  firewalld is active but required services may be blocked:\033[0m"
+                echo -e "\033[38;5;244m$warnings\033[0m"
+                echo -e "\033[38;5;250m   Run these commands to open ports:\033[0m"
+                echo -e "\033[38;5;15m   sudo firewall-cmd --permanent --add-service=http\033[0m"
+                echo -e "\033[38;5;15m   sudo firewall-cmd --permanent --add-service=https\033[0m"
+                echo -e "\033[38;5;15m   sudo firewall-cmd --reload\033[0m"
+                echo
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# Install Caddy reverse proxy for Remnawave
+# Parameters: panel_domain, sub_domain, panel_port, sub_port, sub_prefix, secure_mode
+install_caddy_reverse_proxy() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+    local panel_port="${3:-3000}"
+    local sub_port="${4:-3010}"
+    local sub_prefix="${5:-sub}"
+    local secure_mode="${6:-false}"
+    
+    colorized_echo cyan "==================================================="
+    if [ "$secure_mode" = "true" ]; then
+        colorized_echo cyan "🔒 Installing Caddy Reverse Proxy (Secure Mode)"
+    else
+        colorized_echo cyan "🔧 Installing Caddy Reverse Proxy"
+    fi
+    colorized_echo cyan "==================================================="
+    echo
+    
+    # Check for existing web servers
+    local existing_webserver=$(check_existing_webserver)
+    
+    if [ -n "$existing_webserver" ] && [ "$existing_webserver" != "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Existing web server detected: $existing_webserver"
+        echo
+        colorized_echo yellow "Caddy needs ports 80 and 443 to work properly."
+        colorized_echo yellow "You need to stop or remove the existing web server first."
+        echo
+        read -p "Do you want to continue anyway? (y/n): " -r continue_install
+        if [[ ! $continue_install =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+    elif [ "$existing_webserver" = "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Ports 80 or 443 are already in use"
+        echo
+        colorized_echo yellow "Caddy needs these ports to work properly."
+        echo
+        read -p "Do you want to continue anyway? (y/n): " -r continue_install
+        if [[ ! $continue_install =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+    fi
+    
+    # Check if Caddy is already installed
+    if is_caddy_installed; then
+        colorized_echo yellow "⚠️  Caddy for Remnawave is already installed at $CADDY_DIR"
+        read -p "Do you want to reinstall? (y/n): " -r reinstall
+        if [[ ! $reinstall =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+        # Stop existing Caddy
+        cd "$CADDY_DIR"
+        docker compose down 2>/dev/null || true
+    fi
+    
+    # Create directory
+    mkdir -p "$CADDY_DIR"
+    mkdir -p "$CADDY_DIR/logs"
+    
+    colorized_echo blue "📁 Creating configuration in $CADDY_DIR"
+    echo
+    
+    # Determine caddy image based on mode
+    local caddy_image="caddy:${CADDY_VERSION}"
+    if [ "$secure_mode" = "true" ]; then
+        caddy_image="ghcr.io/remnawave/caddy-with-auth:latest"
+    fi
+    
+    # Create .env file
+    cat > "$CADDY_DIR/.env" << EOF
+# Caddy Reverse Proxy for Remnawave
+# Generated on $(date)
+# Server IP: ${NODE_IP:-127.0.0.1}
+# Mode: $([ "$secure_mode" = "true" ] && echo "Secure (with Caddy Security)" || echo "Simple")
+
+PANEL_DOMAIN=$panel_domain
+SUB_DOMAIN=$sub_domain
+PANEL_PORT=$panel_port
+SUB_PORT=$sub_port
+SUB_PREFIX=$sub_prefix
+EOF
+
+    # Add security-specific env vars
+    if [ "$secure_mode" = "true" ]; then
+        cat >> "$CADDY_DIR/.env" << EOF
+
+# Caddy Security Settings
+REMNAWAVE_PANEL_DOMAIN=$panel_domain
+AUTH_TOKEN_LIFETIME=604800
+EOF
+    fi
+
+    colorized_echo green "✅ .env file created"
+    
+    # Create docker-compose.yml - using remnawave-network like in docs
+    cat > "$CADDY_DIR/docker-compose.yml" << EOF
+services:
+  caddy:
+    image: $caddy_image
+    container_name: caddy-remnawave
+    hostname: caddy
+    restart: always
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    networks:
+      - remnawave-network
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./logs:/var/log/caddy
+      - caddy-ssl-data:/data
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+    external: true
+
+volumes:
+  caddy-ssl-data:
+    driver: local
+    external: false
+    name: caddy-ssl-data
+EOF
+
+    colorized_echo green "✅ docker-compose.yml created"
+    
+    # Create Caddyfile based on mode
+    if [ "$secure_mode" = "true" ]; then
+        # Secure mode with Caddy Security
+        create_secure_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+    else
+        # Simple mode
+        create_simple_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+    fi
+    
+    colorized_echo green "✅ Caddyfile created"
+    echo
+    
+    # Create remnawave-network if it doesn't exist
+    if ! docker network ls --format '{{.Name}}' | grep -q "^remnawave-network$"; then
+        colorized_echo blue "🔗 Creating remnawave-network..."
+        docker network create remnawave-network 2>/dev/null || true
+    fi
+    
+    # Start Caddy
+    colorized_echo blue "🚀 Starting Caddy..."
+    cd "$CADDY_DIR"
+    
+    if docker compose up -d 2>&1; then
+        colorized_echo green "✅ Caddy started successfully!"
+    else
+        colorized_echo red "❌ Failed to start Caddy"
+        return 1
+    fi
+    
+    # Wait for Caddy to start
+    sleep 3
+    
+    # Check if running
+    if docker ps --format '{{.Names}}' | grep -q "caddy-remnawave"; then
+        colorized_echo green "✅ Caddy is running"
+    else
+        colorized_echo red "❌ Caddy container is not running"
+        colorized_echo yellow "Check logs with: docker logs caddy-remnawave"
+        return 1
+    fi
+    
+    echo
+    colorized_echo green "==================================================="
+    colorized_echo green "🎉 Caddy Reverse Proxy installed successfully!"
+    colorized_echo green "==================================================="
+    echo
+    colorized_echo white "📋 Configuration:"
+    if [ "$panel_domain" != "*" ]; then
+        echo "   Panel URL:        https://$panel_domain"
+    fi
+    if [ "$panel_domain" = "$sub_domain" ]; then
+        echo "   Subscription URL: https://$sub_domain/$sub_prefix/"
+    else
+        echo "   Subscription URL: https://$sub_domain"
+    fi
+    echo "   Config directory: $CADDY_DIR"
+    
+    if [ "$secure_mode" = "true" ]; then
+        echo
+        colorized_echo white "🔒 Security Mode:"
+        echo "   Auth portal:      https://$panel_domain/r"
+        echo "   API access:       Open (for integrations)"
+        colorized_echo yellow "   ⚠️  Create admin user: docker exec -it caddy-remnawave caddy hash-password"
+        colorized_echo yellow "   📖 Docs: https://docs.rw/docs/security/caddy-with-minimal-setup"
+    fi
+    
+    echo
+    colorized_echo white "📝 Useful commands:"
+    echo "   View logs:    docker logs caddy-remnawave"
+    echo "   Restart:      cd $CADDY_DIR && docker compose restart"
+    echo "   Edit config:  nano $CADDY_DIR/Caddyfile"
+    echo "   Stop:         cd $CADDY_DIR && docker compose down"
+    echo
+    colorized_echo yellow "💡 Tip: SSL certificates will be automatically issued by Let's Encrypt"
+    echo
+    
+    return 0
+}
+
+# Create simple Caddyfile (no security)
+create_simple_caddyfile() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+    local sub_prefix="${3:-sub}"
+    
+    if [ "$panel_domain" = "$sub_domain" ]; then
+        # Same domain for panel and subscription page
+        cat > "$CADDY_DIR/Caddyfile" << EOF
+# Caddy Reverse Proxy for Remnawave
+# Single domain configuration
+# Generated by remnawave.sh - GIG.OVH Project
+
+# Panel + Subscription on same domain
+https://{\$PANEL_DOMAIN} {
+    # Subscription page routes (prefix: /$sub_prefix/)
+    handle_path /${sub_prefix}/* {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    # Panel - all other routes
+    handle {
+        reverse_proxy remnawave:{\$PANEL_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    log {
+        output file /var/log/caddy/panel.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Fallback for any other HTTPS requests
+:443 {
+    tls internal
+    respond 204
+}
+EOF
+    else
+        # Different domains for panel and subscription page
+        cat > "$CADDY_DIR/Caddyfile" << EOF
+# Caddy Reverse Proxy for Remnawave
+# Multi-domain configuration
+# Generated by remnawave.sh - GIG.OVH Project
+
+# Panel domain
+https://{\$PANEL_DOMAIN} {
+    reverse_proxy remnawave:{\$PANEL_PORT} {
+        header_up X-Real-IP {remote_host}
+        header_up Host {host}
+    }
+    
+    log {
+        output file /var/log/caddy/panel.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Subscription page domain
+https://{\$SUB_DOMAIN} {
+    # Block root path - redirect (optional, remove if not needed)
+    handle / {
+        redir https://www.youtube.com/watch?v=dQw4w9WgXcQ 307
+    }
+    
+    # All subscription paths
+    handle {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    log {
+        output file /var/log/caddy/sub.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Fallback for any other HTTPS requests
+:443 {
+    tls internal
+    respond 204
+}
+EOF
+    fi
+}
+
+# Create secure Caddyfile with Caddy Security (authentication portal)
+create_secure_caddyfile() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+    local sub_prefix="${3:-sub}"
+    
+    # Single domain with security
+    if [ "$panel_domain" = "$sub_domain" ]; then
+        cat > "$CADDY_DIR/Caddyfile" << 'EOF'
+# Caddy Reverse Proxy for Remnawave with Security
+# Single domain + Secure configuration
+# Generated by remnawave.sh - GIG.OVH Project
+# Docs: https://docs.rw/docs/security/caddy-with-minimal-setup
+
+{
+    order authenticate before respond
+    order authorize before respond
+
+    security {
+        local identity store localdb {
+            realm local
+            path /data/.local/caddy/users.json
+        }
+
+        authentication portal remnawaveportal {
+            crypto default token lifetime {$AUTH_TOKEN_LIFETIME}
+            enable identity store localdb
+            cookie domain {$REMNAWAVE_PANEL_DOMAIN}
+            ui {
+                links {
+                    "Remnawave" "/dashboard/home" icon "las la-tachometer-alt"
+                    "My Identity" "/r/whoami" icon "las la-user"
+                    "API Keys" "/r/settings/apikeys" icon "las la-key"
+                    "MFA" "/r/settings/mfa" icon "lab la-keycdn"
+                }
+            }
+            transform user {
+                match origin local
+                action add role authp/admin
+            }
+        }
+
+        authorization policy panelpolicy {
+            set auth url /r
+            allow roles authp/admin
+            with api key auth portal remnawaveportal realm local
+            acl rule {
+                comment "Accept"
+                match role authp/admin
+                allow stop log info
+            }
+            acl rule {
+                comment "Deny"
+                match any
+                deny log warn
+            }
+        }
+    }
+}
+
+https://{$REMNAWAVE_PANEL_DOMAIN} {
+    # API routes - open for integrations
+    route /api/* {
+        reverse_proxy http://remnawave:{$PANEL_PORT}
+    }
+
+EOF
+        # Add subscription prefix handling
+        cat >> "$CADDY_DIR/Caddyfile" << EOF
+    # Subscription page routes (prefix: /${sub_prefix}/)
+    handle_path /${sub_prefix}/* {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT}
+    }
+
+EOF
+        cat >> "$CADDY_DIR/Caddyfile" << 'EOF'
+    # Auth portal
+    handle /r {
+        rewrite * /auth
+        request_header +X-Forwarded-Prefix /r
+        authenticate with remnawaveportal
+    }
+
+    route /r* {
+        authenticate with remnawaveportal
+    }
+
+    # All other routes - protected
+    route /* {
+        authorize with panelpolicy
+        reverse_proxy http://remnawave:{$PANEL_PORT}
+    }
+
+    log {
+        output file /var/log/caddy/panel.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Fallback
+:443 {
+    tls internal
+    respond 204
+}
+EOF
+    else
+        # Multi-domain with security (panel only protected)
+        cat > "$CADDY_DIR/Caddyfile" << 'EOF'
+# Caddy Reverse Proxy for Remnawave with Security
+# Multi-domain + Secure configuration
+# Generated by remnawave.sh - GIG.OVH Project
+# Docs: https://docs.rw/docs/security/caddy-with-minimal-setup
+
+{
+    order authenticate before respond
+    order authorize before respond
+
+    security {
+        local identity store localdb {
+            realm local
+            path /data/.local/caddy/users.json
+        }
+
+        authentication portal remnawaveportal {
+            crypto default token lifetime {$AUTH_TOKEN_LIFETIME}
+            enable identity store localdb
+            cookie domain {$REMNAWAVE_PANEL_DOMAIN}
+            ui {
+                links {
+                    "Remnawave" "/dashboard/home" icon "las la-tachometer-alt"
+                    "My Identity" "/r/whoami" icon "las la-user"
+                    "API Keys" "/r/settings/apikeys" icon "las la-key"
+                    "MFA" "/r/settings/mfa" icon "lab la-keycdn"
+                }
+            }
+            transform user {
+                match origin local
+                action add role authp/admin
+            }
+        }
+
+        authorization policy panelpolicy {
+            set auth url /r
+            allow roles authp/admin
+            with api key auth portal remnawaveportal realm local
+            acl rule {
+                comment "Accept"
+                match role authp/admin
+                allow stop log info
+            }
+            acl rule {
+                comment "Deny"
+                match any
+                deny log warn
+            }
+        }
+    }
+}
+
+# Panel domain - protected
+https://{$REMNAWAVE_PANEL_DOMAIN} {
+    # API routes - open for integrations
+    route /api/* {
+        reverse_proxy http://remnawave:{$PANEL_PORT}
+    }
+
+    # Auth portal
+    handle /r {
+        rewrite * /auth
+        request_header +X-Forwarded-Prefix /r
+        authenticate with remnawaveportal
+    }
+
+    route /r* {
+        authenticate with remnawaveportal
+    }
+
+    # All other routes - protected
+    route /* {
+        authorize with panelpolicy
+        reverse_proxy http://remnawave:{$PANEL_PORT}
+    }
+
+    log {
+        output file /var/log/caddy/panel.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Subscription page domain - open
+https://{$SUB_DOMAIN} {
+    # Block root path
+    handle / {
+        redir https://www.youtube.com/watch?v=dQw4w9WgXcQ 307
+    }
+    
+    # All subscription paths
+    handle {
+        reverse_proxy remnawave-subscription-page:{$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    log {
+        output file /var/log/caddy/sub.log {
+            roll_size 30mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+    }
+}
+
+# Fallback
+:443 {
+    tls internal
+    respond 204
+}
+EOF
+    fi
+}
+
+# Offer to install Caddy after panel installation
+offer_caddy_installation() {
+    local panel_domain="$1"
+    local sub_domain="$2"
+    local panel_port="${3:-3000}"
+    local sub_port="${4:-3010}"
+    local sub_prefix="${5:-sub}"
+    
+    # Skip for wildcard domains
+    if [ "$panel_domain" = "*" ]; then
+        colorized_echo yellow "⚠️  Panel domain is set to '*' (any domain)"
+        colorized_echo yellow "    Automatic Caddy setup is not available for wildcard domains."
+        echo
+        colorized_echo cyan "==================================================="
+        colorized_echo cyan "🌐 Manual Reverse Proxy Setup"
+        colorized_echo cyan "==================================================="
+        colorized_echo yellow "To access the panel from the internet, you need to"
+        colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
+        echo
+        colorized_echo blue "📖 Documentation:"
+        echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
+        colorized_echo cyan "==================================================="
+        return 0
+    fi
+    
+    echo
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "🌐 Reverse Proxy Setup"
+    colorized_echo cyan "==================================================="
+    echo
+    colorized_echo white "Would you like to install Caddy as a reverse proxy?"
+    colorized_echo gray "Caddy will automatically obtain SSL certificates for your domains."
+    echo
+    colorized_echo white "📋 Domains that will be used (from installation):"
+    echo "   Panel domain:        $panel_domain"
+    if [ "$panel_domain" = "$sub_domain" ]; then
+        echo "   Subscription path:   https://$panel_domain/$sub_prefix/"
+    else
+        echo "   Subscription domain: $sub_domain"
+    fi
+    echo
+    
+    # Check for existing web servers
+    local existing_webserver=$(check_existing_webserver)
+    
+    if [ -n "$existing_webserver" ] && [ "$existing_webserver" != "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Note: Existing web server detected: $existing_webserver"
+        echo
+    elif [ "$existing_webserver" = "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Note: Ports 80/443 are already in use"
+        echo
+    fi
+    
+    read -p "Install Caddy reverse proxy? (y/n): " -r install_caddy
+    
+    if [[ $install_caddy =~ ^[Yy]$ ]]; then
+        echo
+        
+        # Check firewall ports first
+        colorized_echo white "🔥 Checking firewall configuration..."
+        echo
+        if ! check_firewall_ports; then
+            read -p "Continue anyway? Caddy may fail to obtain certificates (y/n): " -r continue_firewall
+            if [[ ! $continue_firewall =~ ^[Yy]$ ]]; then
+                colorized_echo gray "Caddy installation cancelled. Please open firewall ports first."
+                return 0
+            fi
+            echo
+        else
+            colorized_echo green "✅ Firewall check passed (or no firewall detected)"
+            echo
+        fi
+        
+        colorized_echo white "🔍 Verifying DNS configuration for your domains..."
+        echo
+        
+        # Validate panel domain DNS
+        local panel_dns_ok=true
+        if ! validate_domain_dns "$panel_domain"; then
+            panel_dns_ok=false
+        fi
+        
+        # Validate subscription domain DNS (if different)
+        local sub_dns_ok=true
+        if [ "$panel_domain" != "$sub_domain" ]; then
+            if ! validate_domain_dns "$sub_domain"; then
+                sub_dns_ok=false
+            fi
+        fi
+        
+        # If DNS validation failed, ask if user wants to continue anyway
+        if [ "$panel_dns_ok" = "false" ] || [ "$sub_dns_ok" = "false" ]; then
+            echo
+            colorized_echo yellow "⚠️  Some DNS checks did not pass."
+            colorized_echo yellow "    Caddy may fail to obtain SSL certificates if domains"
+            colorized_echo yellow "    are not properly pointing to this server."
+            echo
+            read -p "Continue with Caddy installation anyway? (y/n): " -r continue_anyway
+            if [[ ! $continue_anyway =~ ^[Yy]$ ]]; then
+                colorized_echo gray "Caddy installation cancelled."
+                echo
+                colorized_echo cyan "==================================================="
+                colorized_echo cyan "🌐 Manual Reverse Proxy Setup"
+                colorized_echo cyan "==================================================="
+                colorized_echo yellow "Fix DNS configuration, then install Caddy manually:"
+                echo "   cd /opt/caddy-remnawave && docker compose up -d"
+                echo
+                colorized_echo blue "📖 Documentation:"
+                echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
+                colorized_echo cyan "==================================================="
+                return 0
+            fi
+        fi
+        
+        echo
+        colorized_echo white "Select Caddy configuration:"
+        echo
+        echo "  1) Simple (default) - Basic reverse proxy"
+        echo "     • SSL certificates via Let's Encrypt"
+        echo "     • No additional authentication"
+        echo
+        echo "  2) Secure - With Caddy Security portal"
+        echo "     • SSL certificates via Let's Encrypt"
+        echo "     • Additional authentication layer before panel"
+        echo "     • API routes remain open for integrations"
+        echo "     • Optional MFA support"
+        echo "     • Docs: https://docs.rw/docs/security/caddy-with-minimal-setup"
+        echo
+        read -p "Choose option [1/2] (default: 1): " -r caddy_mode
+        
+        local secure_mode="false"
+        if [[ "$caddy_mode" == "2" ]]; then
+            secure_mode="true"
+        fi
+        
+        install_caddy_reverse_proxy "$panel_domain" "$sub_domain" "$panel_port" "$sub_port" "$sub_prefix" "$secure_mode"
+    else
+        colorized_echo gray "Skipping Caddy installation."
+        echo
+        colorized_echo cyan "==================================================="
+        colorized_echo cyan "🌐 Manual Reverse Proxy Setup"
+        colorized_echo cyan "==================================================="
+        colorized_echo yellow "To access the panel from the internet, you need to"
+        colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
+        echo
+        colorized_echo blue "📖 Documentation:"
+        echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
+        colorized_echo cyan "==================================================="
+    fi
+}
+
+# ===== CADDY MANAGEMENT COMMANDS =====
+
+# Start Caddy
+caddy_up_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        colorized_echo yellow "Install Caddy first with: $APP_NAME install"
+        return 1
+    fi
+    
+    colorized_echo blue "Starting Caddy..."
+    cd "$CADDY_DIR"
+    docker compose up -d
+    
+    sleep 2
+    if is_caddy_up; then
+        colorized_echo green "✅ Caddy started successfully!"
+    else
+        colorized_echo red "❌ Failed to start Caddy"
+        docker compose logs --tail=20
+        return 1
+    fi
+}
+
+# Stop Caddy
+caddy_down_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        return 1
+    fi
+    
+    colorized_echo blue "Stopping Caddy..."
+    cd "$CADDY_DIR"
+    docker compose down
+    colorized_echo green "✅ Caddy stopped"
+}
+
+# Restart Caddy
+caddy_restart_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        return 1
+    fi
+    
+    colorized_echo blue "Restarting Caddy..."
+    cd "$CADDY_DIR"
+    docker compose restart
+    
+    sleep 2
+    if is_caddy_up; then
+        colorized_echo green "✅ Caddy restarted successfully!"
+    else
+        colorized_echo red "❌ Failed to restart Caddy"
+        return 1
+    fi
+}
+
+# View Caddy logs
+caddy_logs_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        return 1
+    fi
+    
+    cd "$CADDY_DIR"
+    docker compose logs -f --tail=100
+}
+
+# Caddy status
+caddy_status_command() {
+    echo -e "\033[1;37m🌐 Caddy Reverse Proxy Status:\033[0m"
+    echo
+    
+    if ! is_caddy_installed; then
+        printf "   \033[38;5;15m%-12s\033[0m \033[1;33m⚠️  Not Installed\033[0m\n" "Status:"
+        echo
+        colorized_echo gray "   Install Caddy during panel installation or manually:"
+        colorized_echo gray "   https://docs.rw/docs/install/reverse-proxies/"
+        return 0
+    fi
+    
+    if is_caddy_up; then
+        printf "   \033[38;5;15m%-12s\033[0m \033[1;32m✅ Running\033[0m\n" "Status:"
+    else
+        printf "   \033[38;5;15m%-12s\033[0m \033[1;31m❌ Stopped\033[0m\n" "Status:"
+    fi
+    
+    printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Directory:" "$CADDY_DIR"
+    
+    # Check if secure mode
+    if [ -f "$CADDY_DIR/Caddyfile" ]; then
+        if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
+            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;117mSecure (with authentication)\033[0m\n" "Mode:"
+        else
+            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250mSimple (basic proxy)\033[0m\n" "Mode:"
+        fi
+    fi
+    
+    # Show domains from Caddyfile
+    if [ -f "$CADDY_DIR/Caddyfile" ]; then
+        local domains=$(grep -E "^[a-zA-Z0-9].*\{" "$CADDY_DIR/Caddyfile" 2>/dev/null | sed 's/ {$//' | head -5)
+        if [ -n "$domains" ]; then
+            echo
+            echo -e "\033[1;37m   Configured domains:\033[0m"
+            echo "$domains" | while read -r domain; do
+                echo "     • https://$domain"
+            done
+        fi
+    fi
+    
+    echo
+    
+    # Show container stats if running
+    if is_caddy_up; then
+        local stats=$(docker stats --no-stream --format "{{.CPUPerc}}\t{{.MemUsage}}" caddy-remnawave 2>/dev/null || echo "N/A\tN/A")
+        local cpu_perc=$(echo "$stats" | cut -f1)
+        local mem_usage=$(echo "$stats" | cut -f2)
+        
+        if [ "$cpu_perc" != "N/A" ]; then
+            echo -e "\033[1;37m   Resource usage:\033[0m"
+            printf "     CPU: %-10s Memory: %s\n" "$cpu_perc" "$mem_usage"
+        fi
+    fi
+}
+
+# Edit Caddy configuration
+caddy_edit_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        return 1
+    fi
+    
+    local caddyfile="$CADDY_DIR/Caddyfile"
+    
+    if [ ! -f "$caddyfile" ]; then
+        colorized_echo red "Caddyfile not found at $caddyfile"
+        return 1
+    fi
+    
+    colorized_echo blue "Opening Caddyfile for editing..."
+    colorized_echo yellow "After editing, run: $APP_NAME caddy restart"
+    echo
+    
+    if command -v nano >/dev/null 2>&1; then
+        nano "$caddyfile"
+    elif command -v vim >/dev/null 2>&1; then
+        vim "$caddyfile"
+    elif command -v vi >/dev/null 2>&1; then
+        vi "$caddyfile"
+    else
+        colorized_echo red "No editor found (nano, vim, vi)"
+        colorized_echo yellow "Edit manually: $caddyfile"
+        return 1
+    fi
+}
+
+# Uninstall Caddy
+caddy_uninstall_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo yellow "Caddy is not installed."
+        return 0
+    fi
+    
+    echo -e "\033[1;31m⚠️  This will remove Caddy reverse proxy completely!\033[0m"
+    echo
+    read -p "Are you sure you want to uninstall Caddy? (y/n): " -r confirm
+    
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+        colorized_echo blue "Stopping Caddy..."
+        cd "$CADDY_DIR"
+        docker compose down 2>/dev/null || true
+        
+        colorized_echo blue "Removing Caddy directory..."
+        rm -rf "$CADDY_DIR"
+        
+        colorized_echo green "✅ Caddy has been uninstalled"
+        echo
+        colorized_echo yellow "Note: Your panel will need another reverse proxy to be accessible via HTTPS"
+    else
+        colorized_echo gray "Uninstall cancelled."
+    fi
+}
+
+# Main Caddy command handler
+caddy_command() {
+    local action="${1:-status}"
+    
+    case "$action" in
+        up|start)
+            caddy_up_command
+            ;;
+        down|stop)
+            caddy_down_command
+            ;;
+        restart)
+            caddy_restart_command
+            ;;
+        logs)
+            caddy_logs_command
+            ;;
+        status)
+            caddy_status_command
+            ;;
+        edit)
+            caddy_edit_command
+            ;;
+        uninstall|remove)
+            caddy_uninstall_command
+            ;;
+        *)
+            echo -e "\033[1;37m🌐 Caddy Management Commands:\033[0m"
+            echo
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy" "📊 Show Caddy status"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy up" "▶️  Start Caddy"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy down" "⏹️  Stop Caddy"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy restart" "🔄 Restart Caddy"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy logs" "📋 View Caddy logs"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy edit" "📝 Edit Caddyfile"
+            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy uninstall" "🗑️  Remove Caddy"
+            echo
+            ;;
+    esac
 }
 
 # ===== REMNAWAVE API FUNCTIONS =====
@@ -6123,10 +7414,27 @@ get_admin_token() {
     # Build JSON data properly (avoid variable expansion issues)
     local auth_data='{"username":"'"$username"'","password":"'"$password"'"}'
     
+    # Helper function to extract accessToken from JSON response
+    extract_token() {
+        local response="$1"
+        local token=""
+        
+        # Try jq first if available
+        if command -v jq >/dev/null 2>&1; then
+            token=$(echo "$response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+        fi
+        
+        # Fallback to grep/sed if jq failed or not available
+        if [ -z "$token" ] || [ "$token" = "null" ]; then
+            token=$(echo "$response" | grep -o '"accessToken":"[^"]*"' | head -1 | sed 's/"accessToken":"//;s/"$//')
+        fi
+        
+        echo "$token"
+    }
+    
     # Try to login first
     local login_response=$(make_api_request "POST" "http://$domain_url/api/auth/login" "" "$auth_data")
-    
-    local token=$(echo "$login_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+    local token=$(extract_token "$login_response")
     
     if [ -n "$token" ] && [ "$token" != "null" ]; then
         echo "$token"
@@ -6135,12 +7443,10 @@ get_admin_token() {
     
     # If login failed, try to register (first setup)
     local register_response=$(make_api_request "POST" "http://$domain_url/api/auth/register" "" "$auth_data")
+    token=$(extract_token "$register_response")
     
-    # Debug: show response if registration fails
-    local reg_token=$(echo "$register_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
-    
-    if [ -n "$reg_token" ] && [ "$reg_token" != "null" ]; then
-        echo "$reg_token"
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        echo "$token"
         return 0
     fi
     
@@ -6599,8 +7905,14 @@ install_remnawave() {
         elif [[ -z "$FRONT_END_DOMAIN" ]]; then
             colorized_echo red "Domain cannot be empty"
         elif ! validate_domain "$FRONT_END_DOMAIN" && [[ "$FRONT_END_DOMAIN" != "*" ]]; then
-            colorized_echo red "Invalid domain format. Domain should not contain slashes or spaces."
+            colorized_echo red "Invalid domain format. Domain should be like: panel.example.com"
         else
+            # Validate DNS for non-wildcard domains
+            if [[ "$FRONT_END_DOMAIN" != "*" ]]; then
+                if ! validate_domain_dns "$FRONT_END_DOMAIN"; then
+                    continue
+                fi
+            fi
             break
         fi
     done
@@ -6616,8 +7928,12 @@ install_remnawave() {
         elif [[ "$SUB_DOMAIN" == */* ]]; then
             colorized_echo red "Invalid domain format. Domain should not contain slashes."
         elif ! validate_domain "$SUB_DOMAIN"; then
-            colorized_echo red "Invalid domain format. Domain should not contain slashes or spaces."
+            colorized_echo red "Invalid domain format. Domain should be like: sub.example.com"
         else
+            # Validate DNS for subscription domain
+            if ! validate_domain_dns "$SUB_DOMAIN"; then
+                continue
+            fi
             break
         fi
     done
@@ -7653,6 +8969,9 @@ install_command() {
     if ! command -v openssl >/dev/null 2>&1; then
         install_package openssl
     fi
+    if ! command -v jq >/dev/null 2>&1; then
+        install_package jq
+    fi
     if ! command -v docker >/dev/null 2>&1; then
         install_docker
     fi
@@ -7742,10 +9061,14 @@ install_command() {
   Username: $admin_username
   Password: $admin_password
   
-  
-  
   ⚠️  IMPORTANT: Keep this file secure!
   Delete after memorizing credentials.
+
+----------------------------------------
+  Developed by GIG.ovh project
+  More guides available at our forum:
+  https://gig.ovh
+----------------------------------------
 ========================================
 EOF
                 chmod 600 "$credentials_file"
@@ -7801,15 +9124,9 @@ EOF
     colorized_echo green "Installation complete!"
     colorized_echo green "==================================================="
     echo
-    colorized_echo cyan "==================================================="
-    colorized_echo cyan "🌐 NEXT STEP: Configure Reverse Proxy"
-    colorized_echo cyan "==================================================="
-    colorized_echo yellow "To access the panel from the internet, you need to"
-    colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
-    echo
-    colorized_echo blue "📖 Documentation:"
-    echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
-    colorized_echo cyan "==================================================="
+    
+    # Offer to install Caddy reverse proxy
+    offer_caddy_installation "$FRONT_END_DOMAIN" "$SUB_DOMAIN" "$APP_PORT" "$SUB_PORT" "$CUSTOM_SUB_PREFIX"
 }
 
 uninstall_command() {
@@ -8380,6 +9697,30 @@ status_command() {
     
     echo
     
+    # Caddy Reverse Proxy Status
+    echo -e "\033[1;37m🌐 Reverse Proxy (Caddy):\033[0m"
+    if is_caddy_installed; then
+        if is_caddy_up; then
+            printf "   \033[38;5;15m%-15s\033[0m \033[1;32m✅ Running\033[0m\n" "Status:"
+            
+            # Check mode
+            if [ -f "$CADDY_DIR/Caddyfile" ]; then
+                if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
+                    printf "   \033[38;5;15m%-15s\033[0m \033[38;5;117mSecure (authentication enabled)\033[0m\n" "Mode:"
+                else
+                    printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250mSimple (basic proxy)\033[0m\n" "Mode:"
+                fi
+            fi
+        else
+            printf "   \033[38;5;15m%-15s\033[0m \033[1;31m❌ Stopped\033[0m\n" "Status:"
+            echo -e "\033[38;5;244m   Run '$APP_NAME caddy up' to start\033[0m"
+        fi
+    else
+        printf "   \033[38;5;15m%-15s\033[0m \033[38;5;244mNot installed\033[0m\n" "Status:"
+        echo -e "\033[38;5;244m   Install via '$APP_NAME install' or manually\033[0m"
+    fi
+    
+    echo
 
     if is_remnawave_up; then
         local unhealthy_count=$(docker ps --format "{{.Names}}\t{{.Status}}" | grep "$APP_NAME" | grep -c "unhealthy" 2>/dev/null || echo "0")
@@ -9264,6 +10605,16 @@ usage() {
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "install-script" "📥 Install this script globally"
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "uninstall-script" "📤 Remove script from system"
     echo
+
+    echo -e "\033[1;37m🌐 Caddy Reverse Proxy:\033[0m"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy" "📊 Show Caddy status & help"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy up" "▶️  Start Caddy"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy down" "⏹️  Stop Caddy"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy restart" "🔄 Restart Caddy"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy logs" "📋 View Caddy logs"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy edit" "📝 Edit Caddyfile"
+    echo
+
     echo -e "\033[38;5;8m💡 Flexible restore paths:\033[0m"
     echo -e "\033[38;5;244m   remnawave restore --path /root --name newpanel\033[0m"
     echo -e "\033[38;5;244m   # Installs to /root/newpanel/\033[0m"
@@ -9483,6 +10834,32 @@ command_help() {
             echo -e "   \033[38;5;250m• Docker health\033[0m"
             echo -e "   \033[38;5;250m• Configuration validation\033[0m"
             ;;
+        caddy)
+            echo -e "\033[1;37m📖 Caddy Command Help\033[0m"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 30))\033[0m"
+            echo
+            echo -e "\033[1;37mUsage:\033[0m"
+            echo -e "   \033[38;5;15m$APP_NAME caddy [action]\033[0m"
+            echo
+            echo -e "\033[1;37mActions:\033[0m"
+            echo -e "   \033[38;5;15mstatus\033[0m          Show Caddy status (default)"
+            echo -e "   \033[38;5;15mup/start\033[0m        Start Caddy container"
+            echo -e "   \033[38;5;15mdown/stop\033[0m       Stop Caddy container"
+            echo -e "   \033[38;5;15mrestart\033[0m         Restart Caddy"
+            echo -e "   \033[38;5;15mlogs\033[0m            View Caddy logs"
+            echo -e "   \033[38;5;15medit\033[0m            Edit Caddyfile"
+            echo -e "   \033[38;5;15muninstall\033[0m       Remove Caddy"
+            echo
+            echo -e "\033[1;37mFeatures:\033[0m"
+            echo -e "   \033[38;5;250m• Automatic SSL certificates (Let's Encrypt)\033[0m"
+            echo -e "   \033[38;5;250m• Simple or Secure mode (with auth portal)\033[0m"
+            echo -e "   \033[38;5;250m• Installed to /opt/caddy-remnawave/\033[0m"
+            echo
+            echo -e "\033[1;37mExamples:\033[0m"
+            echo -e "   \033[38;5;244m$APP_NAME caddy\033[0m"
+            echo -e "   \033[38;5;244m$APP_NAME caddy restart\033[0m"
+            echo -e "   \033[38;5;244m$APP_NAME caddy logs\033[0m"
+            ;;
         *)
             echo -e "\033[1;37m📖 Command Help\033[0m"
             echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 20))\033[0m"
@@ -9492,7 +10869,7 @@ command_help() {
             echo -e "\033[1;37mAvailable commands:\033[0m"
             echo -e "   \033[38;5;250minstall, update, uninstall, up, down, restart\033[0m"
             echo -e "   \033[38;5;250mstatus, logs, monitor, health, backup, schedule\033[0m"
-            echo -e "   \033[38;5;250medit, edit-env, console, pm2-monitor\033[0m"
+            echo -e "   \033[38;5;250medit, edit-env, console, pm2-monitor, caddy\033[0m"
             echo
             echo -e "\033[38;5;8mUse '\033[38;5;15m$APP_NAME help\033[38;5;8m' for full usage\033[0m"
             ;;
@@ -9544,6 +10921,7 @@ case "$COMMAND" in
     subpage) subpage_command ;;
     subpage-restart) subpage_restart_command ;;
     subpage-token) subpage_configure_token ;;
+    caddy) caddy_command "$1" ;;
     menu) main_menu ;;  
     help) smart_usage "help" "$1" ;;
     --version|-v) show_version ;;
