@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=4.0.3
+# VERSION=4.0.4
 
-SCRIPT_VERSION="4.0.3"
+SCRIPT_VERSION="4.0.4"
 BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6953,7 +6953,13 @@ up_remnawave() {
 # Start only core services (without subscription-page) - used during initial installation
 up_remnawave_core() {
     colorized_echo blue "Starting core services (database, redis, panel)..."
-    $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans ${APP_NAME}-db ${APP_NAME}-redis ${APP_NAME} 2>/dev/null
+    
+    # Stop subscription-page if it's running (from previous installation)
+    $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" stop remnawave-subscription-page >/dev/null 2>&1 || true
+    
+    # Start only core services (use service names from docker-compose.yml, not container names)
+    # Redirect both stdout and stderr to suppress docker compose progress output
+    $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" up -d remnawave-db remnawave-redis remnawave >/dev/null 2>&1
     
     # Wait for services to be healthy
     local max_wait=60
