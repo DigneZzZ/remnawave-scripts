@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=4.0.8
+# VERSION=5.0.1
 
-SCRIPT_VERSION="5.0.0"
+SCRIPT_VERSION="5.0.1"
 BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6488,11 +6488,21 @@ EOF
 
     # Add security-specific env vars
     if [ "$secure_mode" = "true" ]; then
+        # Generate admin credentials
+        local caddy_admin_user="admin"
+        local caddy_admin_email="${caddy_admin_user}@${panel_domain}"
+        local caddy_admin_password=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)
+        
         cat >> "$CADDY_DIR/.env" << EOF
 
 # Caddy Security Settings
 REMNAWAVE_PANEL_DOMAIN=$panel_domain
 AUTH_TOKEN_LIFETIME=604800
+
+# Admin Credentials (used to create initial user)
+AUTHP_ADMIN_USER=$caddy_admin_user
+AUTHP_ADMIN_EMAIL=$caddy_admin_email
+AUTHP_ADMIN_SECRET=$caddy_admin_password
 EOF
     fi
 
@@ -6600,8 +6610,53 @@ EOF
         colorized_echo white "🔒 Security Mode:"
         echo "   Auth portal:      https://$panel_domain/r"
         echo "   API access:       Open (for integrations)"
-        colorized_echo yellow "   ⚠️  Create admin user: docker exec -it caddy-remnawave caddy hash-password"
-        colorized_echo yellow "   📖 Docs: https://docs.rw/docs/security/caddy-with-minimal-setup"
+        
+        # Read admin credentials from .env (already generated)
+        local caddy_admin_user=$(grep "^AUTHP_ADMIN_USER=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+        local caddy_admin_email=$(grep "^AUTHP_ADMIN_EMAIL=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+        local caddy_admin_password=$(grep "^AUTHP_ADMIN_SECRET=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+        
+        colorized_echo green "   ✅ Admin credentials configured!"
+        colorized_echo gray "   (Caddy will create user on first start)"
+        
+        # Save credentials to file
+        local caddy_creds_file="$CADDY_DIR/caddy-credentials.txt"
+        cat > "$caddy_creds_file" << CREDSEOF
+========================================
+  CADDY SECURITY ADMIN CREDENTIALS
+========================================
+  Created: $(date '+%Y-%m-%d %H:%M:%S')
+  
+  Auth Portal: https://$panel_domain/r
+  
+  Username: $caddy_admin_user
+  Email:    $caddy_admin_email
+  Password: $caddy_admin_password
+  
+  ⚠️  IMPORTANT: Keep this file secure!
+  Delete after memorizing credentials.
+
+----------------------------------------
+  Developed by GIG.ovh project
+----------------------------------------
+========================================
+CREDSEOF
+        chmod 600 "$caddy_creds_file"
+        
+        echo
+        colorized_echo cyan "==================================================="
+        colorized_echo cyan "🔐 CADDY SECURITY CREDENTIALS"
+        colorized_echo cyan "==================================================="
+        echo -e "\033[1;37m   Auth Portal:\033[0m \033[38;5;117mhttps://$panel_domain/r\033[0m"
+        echo -e "\033[1;37m   Username:\033[0m    \033[1;32m$caddy_admin_user\033[0m"
+        echo -e "\033[1;37m   Password:\033[0m    \033[1;32m$caddy_admin_password\033[0m"
+        colorized_echo cyan "==================================================="
+        colorized_echo yellow "⚠️  Credentials saved to: $caddy_creds_file"
+        colorized_echo cyan "==================================================="
+        else
+            colorized_echo yellow "   ⚠️  Could not generate admin user automatically"
+            colorized_echo yellow "   📖 Follow manual setup: https://docs.rw/docs/security/caddy-with-minimal-setup"
+        fi
     fi
     
     echo
@@ -7293,6 +7348,119 @@ caddy_uninstall_command() {
     fi
 }
 
+# Reset Caddy Security user (regenerate password)
+caddy_reset_user_command() {
+    check_running_as_root
+    
+    if ! is_caddy_installed; then
+        colorized_echo red "Caddy is not installed!"
+        return 1
+    fi
+    
+    # Check if it's secure mode
+    if ! grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
+        colorized_echo yellow "Caddy is running in Simple mode (no authentication)."
+        colorized_echo yellow "This command is only for Secure mode with Caddy Security."
+        return 1
+    fi
+    
+    echo -e "\033[1;37m🔑 Reset Caddy Security User\033[0m"
+    echo
+    colorized_echo yellow "This will create a new admin user with a new password."
+    colorized_echo yellow "The old user credentials will be replaced."
+    echo
+    
+    read -p "Continue? (y/n): " -r confirm
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        colorized_echo gray "Cancelled."
+        return 0
+    fi
+    
+    echo
+    colorized_echo blue "🔑 Generating new admin credentials..."
+    
+    # Get panel domain from .env
+    local panel_domain=""
+    if [ -f "$CADDY_DIR/.env" ]; then
+        panel_domain=$(grep "^REMNAWAVE_PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    fi
+    
+    if [ -z "$panel_domain" ]; then
+        panel_domain="localhost"
+    fi
+    
+    # Generate new credentials
+    local caddy_admin_user="admin"
+    local caddy_admin_email="${caddy_admin_user}@${panel_domain}"
+    local caddy_admin_password=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)
+    
+    # Step 1: Delete users.json inside container (if container is running)
+    colorized_echo blue "🗑️  Removing old users.json..."
+    if docker ps --format '{{.Names}}' | grep -q "^caddy-remnawave$"; then
+        docker exec caddy-remnawave rm -f /data/.local/caddy/users.json 2>/dev/null || true
+    fi
+    
+    # Step 2: Stop container
+    colorized_echo blue "⏹️  Stopping Caddy..."
+    cd "$CADDY_DIR"
+    docker compose down >/dev/null 2>&1
+    
+    # Step 3: Update AUTHP_ADMIN_SECRET in .env (without $ symbols!)
+    colorized_echo blue "📝 Updating credentials in .env..."
+    if grep -q "^AUTHP_ADMIN_SECRET=" "$CADDY_DIR/.env" 2>/dev/null; then
+        sed -i "s/^AUTHP_ADMIN_SECRET=.*/AUTHP_ADMIN_SECRET=$caddy_admin_password/" "$CADDY_DIR/.env"
+    else
+        # Add if not exists
+        echo "" >> "$CADDY_DIR/.env"
+        echo "# Admin Credentials" >> "$CADDY_DIR/.env"
+        echo "AUTHP_ADMIN_USER=$caddy_admin_user" >> "$CADDY_DIR/.env"
+        echo "AUTHP_ADMIN_EMAIL=$caddy_admin_email" >> "$CADDY_DIR/.env"
+        echo "AUTHP_ADMIN_SECRET=$caddy_admin_password" >> "$CADDY_DIR/.env"
+    fi
+    
+    # Step 4: Start container - Caddy will create new users.json from ENV
+    colorized_echo blue "▶️  Starting Caddy..."
+    docker compose up -d >/dev/null 2>&1
+    sleep 3
+    
+    colorized_echo green "✅ Admin user reset successfully!"
+    
+    # Save credentials to file
+    local caddy_creds_file="$CADDY_DIR/caddy-credentials.txt"
+    cat > "$caddy_creds_file" << CREDSEOF
+========================================
+  CADDY SECURITY ADMIN CREDENTIALS
+========================================
+  Created: $(date '+%Y-%m-%d %H:%M:%S')
+  
+  Auth Portal: https://$panel_domain/r
+  
+  Username: $caddy_admin_user
+  Email:    $caddy_admin_email
+  Password: $caddy_admin_password
+  
+  ⚠️  IMPORTANT: Keep this file secure!
+  Delete after memorizing credentials.
+
+----------------------------------------
+  Developed by GIG.ovh project
+----------------------------------------
+========================================
+CREDSEOF
+    chmod 600 "$caddy_creds_file"
+    
+    echo
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "🔐 NEW CADDY SECURITY CREDENTIALS"
+    colorized_echo cyan "==================================================="
+    echo -e "\033[1;37m   Auth Portal:\033[0m \033[38;5;117mhttps://$panel_domain/r\033[0m"
+    echo -e "\033[1;37m   Username:\033[0m    \033[1;32m$caddy_admin_user\033[0m"
+    echo -e "\033[1;37m   Password:\033[0m    \033[1;32m$caddy_admin_password\033[0m"
+    colorized_echo cyan "==================================================="
+    colorized_echo yellow "⚠️  Credentials saved to: $caddy_creds_file"
+    colorized_echo cyan "==================================================="
+}
+
 # Main Caddy command handler
 caddy_command() {
     local action="${1:-status}"
@@ -7319,16 +7487,20 @@ caddy_command() {
         uninstall|remove)
             caddy_uninstall_command
             ;;
+        reset-user|reset-password)
+            caddy_reset_user_command
+            ;;
         *)
             echo -e "\033[1;37m🌐 Caddy Management Commands:\033[0m"
             echo
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy" "📊 Show Caddy status"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy up" "▶️  Start Caddy"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy down" "⏹️  Stop Caddy"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy restart" "🔄 Restart Caddy"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy logs" "📋 View Caddy logs"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy edit" "📝 Edit Caddyfile"
-            printf "   \033[38;5;15m%-18s\033[0m %s\n" "$APP_NAME caddy uninstall" "🗑️  Remove Caddy"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy" "📊 Show Caddy status"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy up" "▶️  Start Caddy"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy down" "⏹️  Stop Caddy"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy restart" "🔄 Restart Caddy"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy logs" "📋 View Caddy logs"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy edit" "📝 Edit Caddyfile"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy reset-user" "🔑 Reset admin password (Secure mode)"
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy uninstall" "🗑️  Remove Caddy"
             echo
             ;;
     esac
@@ -9141,11 +9313,88 @@ uninstall_command() {
         colorized_echo red "Aborted"
         exit 1
     fi
+    
+    # Create safety backup before uninstall
+    local backup_timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_dir="$HOME/remnawave-backup-before-uninstall-$backup_timestamp"
+    
+    echo
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "💾 Creating safety backup before uninstall..."
+    colorized_echo cyan "==================================================="
+    echo
+    
+    mkdir -p "$backup_dir"
+    
+    # Backup main panel directory
+    if [ -d "$APP_DIR" ]; then
+        colorized_echo blue "📦 Backing up panel directory: $APP_DIR"
+        cp -r "$APP_DIR" "$backup_dir/panel/" 2>/dev/null || true
+        colorized_echo green "   ✅ Panel directory backed up"
+    fi
+    
+    # Backup Caddy directory if exists
+    if [ -d "$CADDY_DIR" ]; then
+        colorized_echo blue "📦 Backing up Caddy directory: $CADDY_DIR"
+        cp -r "$CADDY_DIR" "$backup_dir/caddy/" 2>/dev/null || true
+        colorized_echo green "   ✅ Caddy directory backed up"
+    fi
+    
+    # Export database if running
+    detect_compose
+    if is_remnawave_up; then
+        colorized_echo blue "📦 Exporting database..."
+        local db_backup_file="$backup_dir/database.sql"
+        
+        # Get DB credentials from .env
+        local db_user=$(grep "^POSTGRES_USER=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        local db_pass=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        local db_name=$(grep "^POSTGRES_DB=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        
+        if [ -n "$db_user" ] && [ -n "$db_pass" ] && [ -n "$db_name" ]; then
+            if docker exec -e PGPASSWORD="$db_pass" "${APP_NAME}-db" pg_dump -U "$db_user" -d "$db_name" > "$db_backup_file" 2>/dev/null; then
+                gzip "$db_backup_file" 2>/dev/null || true
+                colorized_echo green "   ✅ Database exported to database.sql.gz"
+            else
+                colorized_echo yellow "   ⚠️  Could not export database (container may not be ready)"
+            fi
+        fi
+    fi
+    
+    # Create final archive
+    colorized_echo blue "📦 Creating compressed archive..."
+    local final_archive="$HOME/remnawave-backup-$backup_timestamp.tar.gz"
+    tar -czf "$final_archive" -C "$backup_dir" . 2>/dev/null
+    rm -rf "$backup_dir"
+    
+    echo
+    colorized_echo green "==================================================="
+    colorized_echo green "✅ Safety backup created!"
+    colorized_echo green "==================================================="
+    colorized_echo white "📁 Location: $final_archive"
+    echo
+    colorized_echo yellow "💡 This backup can be used to restore later with:"
+    colorized_echo yellow "   remnawave restore --file $final_archive"
+    echo
 
     detect_compose
     if is_remnawave_up; then
         down_remnawave
     fi
+    
+    # Also stop and remove Caddy if installed
+    if is_caddy_installed; then
+        colorized_echo blue "Stopping Caddy..."
+        cd "$CADDY_DIR" && docker compose down 2>/dev/null || true
+        
+        read -p "Do you also want to remove Caddy reverse proxy? (y/n) "
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            colorized_echo yellow "Removing Caddy directory: $CADDY_DIR"
+            rm -rf "$CADDY_DIR"
+            colorized_echo green "✅ Caddy removed"
+        fi
+    fi
+    
     uninstall_remnawave_script
     uninstall_remnawave
     uninstall_remnawave_docker_images
@@ -9153,9 +9402,18 @@ uninstall_command() {
     read -p "Do you want to remove Remnawave data volumes too? This will DELETE ALL DATABASE DATA! (y/n) "
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         uninstall_remnawave_volumes
+        
+        # Also remove Caddy volumes
+        local caddy_volumes=$(docker volume ls -q | grep -E "caddy" || true)
+        if [ -n "$caddy_volumes" ]; then
+            colorized_echo yellow "Removing Caddy volumes..."
+            echo "$caddy_volumes" | xargs docker volume rm 2>/dev/null || true
+        fi
     fi
 
     colorized_echo green "Remnawave uninstalled successfully"
+    echo
+    colorized_echo yellow "📁 Your backup is saved at: $final_archive"
 }
 
 install_subpage_command() {
@@ -10613,6 +10871,7 @@ usage() {
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy restart" "🔄 Restart Caddy"
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy logs" "📋 View Caddy logs"
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy edit" "📝 Edit Caddyfile"
+    printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy reset-user" "🔑 Reset admin password"
     echo
 
     echo -e "\033[38;5;8m💡 Flexible restore paths:\033[0m"
@@ -10848,6 +11107,7 @@ command_help() {
             echo -e "   \033[38;5;15mrestart\033[0m         Restart Caddy"
             echo -e "   \033[38;5;15mlogs\033[0m            View Caddy logs"
             echo -e "   \033[38;5;15medit\033[0m            Edit Caddyfile"
+            echo -e "   \033[38;5;15mreset-user\033[0m      Reset admin password (Secure mode)"
             echo -e "   \033[38;5;15muninstall\033[0m       Remove Caddy"
             echo
             echo -e "\033[1;37mFeatures:\033[0m"
@@ -10859,6 +11119,7 @@ command_help() {
             echo -e "   \033[38;5;244m$APP_NAME caddy\033[0m"
             echo -e "   \033[38;5;244m$APP_NAME caddy restart\033[0m"
             echo -e "   \033[38;5;244m$APP_NAME caddy logs\033[0m"
+            echo -e "   \033[38;5;244m$APP_NAME caddy reset-user\033[0m"
             ;;
         *)
             echo -e "\033[1;37m📖 Command Help\033[0m"
