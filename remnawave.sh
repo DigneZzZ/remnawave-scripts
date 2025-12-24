@@ -6950,6 +6950,35 @@ up_remnawave() {
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans
 }
 
+# Start only core services (without subscription-page) - used during initial installation
+up_remnawave_core() {
+    colorized_echo blue "Starting core services (database, redis, panel)..."
+    $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans ${APP_NAME}-db ${APP_NAME}-redis ${APP_NAME} 2>/dev/null
+    
+    # Wait for services to be healthy
+    local max_wait=60
+    local waited=0
+    echo -ne "\033[38;5;244m   Waiting for services to be ready"
+    while [ $waited -lt $max_wait ]; do
+        local db_healthy=$(docker inspect --format='{{.State.Health.Status}}' ${APP_NAME}-db 2>/dev/null)
+        local redis_healthy=$(docker inspect --format='{{.State.Health.Status}}' ${APP_NAME}-redis 2>/dev/null)
+        local panel_running=$(docker inspect --format='{{.State.Running}}' ${APP_NAME} 2>/dev/null)
+        
+        if [ "$db_healthy" = "healthy" ] && [ "$redis_healthy" = "healthy" ] && [ "$panel_running" = "true" ]; then
+            echo -e "\033[0m"
+            colorized_echo green "✅ Core services are running!"
+            return 0
+        fi
+        
+        echo -n "."
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo -e "\033[0m"
+    colorized_echo yellow "⚠️  Services may still be starting..."
+    return 0
+}
+
 recreate_remnawave() {
     # Принудительное пересоздание контейнеров с новыми образами
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --force-recreate --remove-orphans
@@ -7620,10 +7649,12 @@ install_command() {
     detect_compose
     install_remnawave_script
     install_remnawave
-    up_remnawave
-
-    follow_remnawave_logs
-
+    
+    # Start only core services first (without subscription-page)
+    # subscription-page will be started after API token is configured
+    up_remnawave_core
+    
+    echo
     colorized_echo green "==================================================="
     colorized_echo green "Remnawave Panel has been installed successfully!"
     colorized_echo green "Panel URL (local access only): http://127.0.0.1:$APP_PORT"
@@ -7671,8 +7702,8 @@ install_command() {
             # Generate admin credentials automatically
             # Username: 10 chars (letters and digits)
             local admin_username=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
-            # Password: 24 chars (letters, digits, and safe symbols)
-            local admin_password=$(tr -dc 'a-zA-Z0-9!@#$%^&*()_+-=' < /dev/urandom | head -c 24)
+            # Password: 24 chars (letters, digits, and safe symbols that won't break JSON)
+            local admin_password=$(tr -dc 'a-zA-Z0-9_-' < /dev/urandom | head -c 24)
             
             colorized_echo blue "Generated admin credentials:"
             echo -e "   \033[1;37mUsername:\033[0m \033[1;32m$admin_username\033[0m"
