@@ -3,7 +3,7 @@
 # This script installs and manages Remnawave Panel
 # VERSION=4.0.4
 
-SCRIPT_VERSION="4.0.4"
+SCRIPT_VERSION="4.0.5"
 BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6120,9 +6120,11 @@ get_admin_token() {
     local username="$1"
     local password="$2"
     
+    # Build JSON data properly (avoid variable expansion issues)
+    local auth_data='{"username":"'"$username"'","password":"'"$password"'"}'
+    
     # Try to login first
-    local login_response=$(make_api_request "POST" "http://$domain_url/api/auth/login" "" \
-        "{\"username\":\"$username\",\"password\":\"$password\"}")
+    local login_response=$(make_api_request "POST" "http://$domain_url/api/auth/login" "" "$auth_data")
     
     local token=$(echo "$login_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
     
@@ -6132,15 +6134,18 @@ get_admin_token() {
     fi
     
     # If login failed, try to register (first setup)
-    local register_response=$(make_api_request "POST" "http://$domain_url/api/auth/register" "" \
-        "{\"username\":\"$username\",\"password\":\"$password\"}")
+    local register_response=$(make_api_request "POST" "http://$domain_url/api/auth/register" "" "$auth_data")
     
-    token=$(echo "$register_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+    # Debug: show response if registration fails
+    local reg_token=$(echo "$register_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
     
-    if [ -n "$token" ] && [ "$token" != "null" ]; then
-        echo "$token"
+    if [ -n "$reg_token" ] && [ "$reg_token" != "null" ]; then
+        echo "$reg_token"
         return 0
     fi
+    
+    # Log error for debugging
+    echo -e "\033[38;5;244m   Debug: Register response: $register_response\033[0m" >&2
     
     return 1
 }
@@ -7703,6 +7708,10 @@ install_command() {
         if wait_for_api_ready 30; then
             echo
             colorized_echo green "Panel is ready!"
+            
+            # Additional wait for database migrations to complete
+            colorized_echo blue "Waiting for database migrations..."
+            sleep 10
             echo
             
             # Generate admin credentials automatically
