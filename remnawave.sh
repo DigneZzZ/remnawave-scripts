@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.1.0
+# VERSION=5.1.1
 
-SCRIPT_VERSION="5.1.0"
+SCRIPT_VERSION="5.1.1"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6653,10 +6653,6 @@ CREDSEOF
         colorized_echo cyan "==================================================="
         colorized_echo yellow "⚠️  Credentials saved to: $caddy_creds_file"
         colorized_echo cyan "==================================================="
-        else
-            colorized_echo yellow "   ⚠️  Could not generate admin user automatically"
-            colorized_echo yellow "   📖 Follow manual setup: https://docs.rw/docs/security/caddy-with-minimal-setup"
-        fi
     fi
     
     echo
@@ -8553,7 +8549,7 @@ backup_command() {
                 echo -e "  \033[38;5;15m$APP_NAME backup\033[0m                           \033[38;5;8m# Full backup (default)\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --compress\033[0m                \033[38;5;8m# Compressed full backup\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --data-only\033[0m               \033[38;5;8m# Database only\033[0m"
-                echo -e "  \033[38;5;15m$APP_NAME backup --include-caddy\033[0m           \033[38;5;8m# Include Caddy config\033[0m""
+                echo -e "  \033[38;5;15m$APP_NAME backup --include-caddy\033[0m           \033[38;5;8m# Include Caddy config\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --data-only --compress\033[0m    \033[38;5;8m# Compressed database only\033[0m"
                 echo
                 echo -e "\033[38;5;8mDefault: Full backup includes database + configuration files\033[0m"
