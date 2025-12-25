@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.4.0
+# VERSION=5.4.1
 
-SCRIPT_VERSION="5.4.0"
+SCRIPT_VERSION="5.4.1"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -8821,6 +8821,12 @@ up_remnawave() {
 # Start only core services (without subscription-page) - used during initial installation
 up_remnawave_core() {
     colorized_echo blue "Starting core services (database, redis, panel)..."
+    
+    # Change to app directory to avoid "getwd" errors
+    cd "$APP_DIR" || {
+        colorized_echo red "❌ Cannot access directory: $APP_DIR"
+        return 1
+    }
     
     # Stop subscription-page if it's running (from previous installation)
     $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" stop remnawave-subscription-page >/dev/null 2>&1 || true
