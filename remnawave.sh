@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.1.1
+# VERSION=5.3.1
 
-SCRIPT_VERSION="5.3.0"
+SCRIPT_VERSION="5.3.1"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -10993,8 +10993,8 @@ main_menu() {
                 echo -e "\033[1;32m✅ $(L PANEL_RUNNING)\033[0m"
                 
                 if [ -f "$ENV_FILE" ]; then
-                    local panel_domain=$(grep "FRONT_END_DOMAIN=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" | xargs 2>/dev/null)
-                    local sub_domain=$(grep "SUB_PUBLIC_DOMAIN=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" | xargs 2>/dev/null)
+                    local panel_domain=$(grep "^FRONT_END_DOMAIN=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | awk '{print $1}')
+                    local sub_domain=$(grep "^SUB_PUBLIC_DOMAIN=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | awk '{print $1}')
                     
                     if [ -n "$panel_domain" ] && [ "$panel_domain" != "null" ]; then
                         echo
