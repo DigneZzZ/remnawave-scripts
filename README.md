@@ -2,7 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-5.3.0-blue.svg)](#)
+[![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
 [![Backup & Restore](https://img.shields.io/badge/Tool-Backup%20%26%20Restore-orange)](#-backup--restore-system)
@@ -62,6 +63,7 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 **🎛️ Complete CLI Management**
 * Full command interface: `install`, `up`, `down`, `restart`, `logs`, `status`, `edit`, `update`, `uninstall`
 * Interactive main menu with colorized output
+* **Bilingual interface (EN/RU)** with language switcher (v5.3.0+)
 * Script self-updating with version checking
 * Console access to internal panel CLI
 
@@ -107,6 +109,13 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 * Full Caddy management: `caddy up`, `caddy down`, `caddy logs`, `caddy edit`, `caddy reset-user`
 * Auto-generated admin credentials for Secure mode (stored in `.env`)
 * Installed to `/opt/caddy-remnawave/` as Docker container
+* **Localized Caddy menu** (EN/RU) (v5.3.0+)
+
+**🌐 Bilingual Interface (v5.3.0+)**
+* Menu language switcher: press `L` in main menu
+* English and Russian translations for all menus
+* Language preference saved between sessions
+* Reorganized menu structure with logical groupings
 
 **📄 Subscription Page v7.0.0+ Support**
 * New `REMNAWAVE_API_TOKEN` configuration
