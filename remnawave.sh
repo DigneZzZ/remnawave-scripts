@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.4.1
+# VERSION=5.4.4
 
-SCRIPT_VERSION="5.4.1"
+SCRIPT_VERSION="5.4.4"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -6923,15 +6923,18 @@ create_simple_caddyfile() {
 
 # Panel + Subscription on same domain
 https://{\$PANEL_DOMAIN} {
-    # Static assets for subscription page
+    # Assets - open for all (tries both subscription-page and panel)
     handle /assets/* {
-        reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
+        reverse_proxy {
+            to remnawave-subscription-page:{\$SUB_PORT}
+            to remnawave:{\$PANEL_PORT}
+            lb_policy first
             header_up X-Real-IP {remote_host}
             header_up Host {host}
         }
     }
-    
-    # Subscription page routes (prefix: /$sub_prefix/)
+
+    # Subscription page routes - open for all
     handle /${sub_prefix}/* {
         reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
             header_up X-Real-IP {remote_host}
@@ -6992,7 +6995,15 @@ https://{\$SUB_DOMAIN} {
         redir https://www.youtube.com/watch?v=dQw4w9WgXcQ 307
     }
     
-    # All subscription paths
+    # Assets - explicitly handle for subscription page
+    handle /assets/* {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    # All other subscription paths
     handle {
         reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
             header_up X-Real-IP {remote_host}
@@ -7085,15 +7096,21 @@ https://{$REMNAWAVE_PANEL_DOMAIN} {
     }
 
 EOF
-        # Add subscription prefix handling
-        cat >> "$CADDY_DIR/Caddyfile" << EOF
-    # Static assets for subscription page
-    handle /assets/* {
-        reverse_proxy remnawave-subscription-page:{\$SUB_PORT}
+        # Add subscription and assets routes (open for all)
+        cat >> "$CADDY_DIR/Caddyfile" << 'EOF'
+    # Assets - open for all (tries both subscription-page and panel)
+    route /assets/* {
+        reverse_proxy {
+            to remnawave-subscription-page:{$SUB_PORT}
+            to http://remnawave:{$PANEL_PORT}
+            lb_policy first
+        }
     }
-    
-    # Subscription page routes (prefix: /${sub_prefix}/)
-    handle /${sub_prefix}/* {
+
+EOF
+        cat >> "$CADDY_DIR/Caddyfile" << EOF
+    # Subscription page routes - open for all
+    route /${sub_prefix}/* {
         reverse_proxy remnawave-subscription-page:{\$SUB_PORT}
     }
 
@@ -7225,7 +7242,15 @@ https://{$SUB_DOMAIN} {
         redir https://www.youtube.com/watch?v=dQw4w9WgXcQ 307
     }
     
-    # All subscription paths
+    # Assets - explicitly handle for subscription page
+    handle /assets/* {
+        reverse_proxy remnawave-subscription-page:{$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
+    # All other subscription paths
     handle {
         reverse_proxy remnawave-subscription-page:{$SUB_PORT} {
             header_up X-Real-IP {remote_host}
@@ -7249,6 +7274,135 @@ https://{$SUB_DOMAIN} {
 }
 EOF
     fi
+}
+
+# Display final credentials summary after installation
+display_final_credentials_summary() {
+    local panel_username="$1"
+    local panel_password="$2"
+    local panel_domain="$3"
+    local sub_domain="$4"
+    local sub_prefix="${5:-sub}"
+    
+    # Check if Caddy is installed
+    local caddy_installed=false
+    local caddy_secure_mode=false
+    local caddy_admin_user=""
+    local caddy_admin_password=""
+    
+    if is_caddy_installed; then
+        caddy_installed=true
+        
+        # Check if running in secure mode
+        if docker ps --format '{{.Names}}' | grep -q "caddy-remnawave"; then
+            if docker exec caddy-remnawave caddy version 2>/dev/null | grep -q "security"; then
+                caddy_secure_mode=true
+                
+                # Try to read Caddy credentials
+                if [ -f "$CADDY_DIR/.env" ]; then
+                    caddy_admin_user=$(grep "^AUTHP_ADMIN_USER=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+                    caddy_admin_password=$(grep "^AUTHP_ADMIN_SECRET=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+                fi
+            fi
+        fi
+    fi
+    
+    echo
+    echo
+    colorized_echo green "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    colorized_echo green "┃                                                    "
+    colorized_echo green "┃          🎉 INSTALLATION COMPLETED! 🎉              "
+    colorized_echo green "┃                                                    "
+    colorized_echo green "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    
+    # Panel credentials
+    if [ -n "$panel_username" ] && [ -n "$panel_password" ]; then
+        colorized_echo cyan "┌─────────────────────────────────────────────────────"
+        colorized_echo cyan "│  🔐 REMNAWAVE PANEL CREDENTIALS                     "
+        colorized_echo cyan "└─────────────────────────────────────────────────────"
+        echo
+        
+        if [ "$caddy_installed" = "true" ]; then
+            if [ "$panel_domain" != "*" ]; then
+                echo -e "   \033[1;37mPanel URL:\033[0m     \033[38;5;117mhttps://$panel_domain\033[0m"
+            else
+                echo -e "   \033[1;37mPanel URL:\033[0m     \033[38;5;244mhttp://YOUR-SERVER-IP:3000\033[0m"
+            fi
+            
+            if [ "$panel_domain" = "$sub_domain" ]; then
+                echo -e "   \033[1;37mSubscriptions:\033[0m \033[38;5;117mhttps://$sub_domain/$sub_prefix/\033[0m"
+            elif [ "$sub_domain" != "*" ]; then
+                echo -e "   \033[1;37mSubscriptions:\033[0m \033[38;5;117mhttps://$sub_domain\033[0m"
+            fi
+        else
+            echo -e "   \033[1;37mPanel URL:\033[0m     \033[38;5;244mhttp://127.0.0.1:3000\033[0m"
+            echo -e "   \033[1;37mSubscriptions:\033[0m \033[38;5;244mhttp://127.0.0.1:3010\033[0m"
+        fi
+        
+        echo
+        echo -e "   \033[1;37mUsername:\033[0m      \033[1;32m$panel_username\033[0m"
+        echo -e "   \033[1;37mPassword:\033[0m      \033[1;32m$panel_password\033[0m"
+        echo
+        colorized_echo yellow "   💾 Saved to: $APP_DIR/admin-credentials.txt"
+        echo
+    fi
+    
+    # Caddy credentials (if secure mode)
+    if [ "$caddy_secure_mode" = "true" ] && [ -n "$caddy_admin_user" ] && [ -n "$caddy_admin_password" ]; then
+        colorized_echo cyan "┌─────────────────────────────────────────────────────"
+        colorized_echo cyan "│  🔒 CADDY SECURITY AUTH PORTAL                      "
+        colorized_echo cyan "└─────────────────────────────────────────────────────"
+        echo
+        
+        if [ "$panel_domain" != "*" ]; then
+            echo -e "   \033[1;37mAuth Portal:\033[0m   \033[38;5;117mhttps://$panel_domain/r\033[0m"
+        fi
+        echo -e "   \033[1;37mUsername:\033[0m      \033[1;32m$caddy_admin_user\033[0m"
+        echo -e "   \033[1;37mPassword:\033[0m      \033[1;32m$caddy_admin_password\033[0m"
+        echo
+        colorized_echo yellow "   💾 Saved to: $CADDY_DIR/caddy-credentials.txt"
+        echo
+        colorized_echo gray "   ℹ️  API routes (/api/*) remain open for integrations"
+        echo
+    fi
+    
+    # Important notes
+    colorized_echo cyan "┌─────────────────────────────────────────────────────"
+    colorized_echo cyan "│  📋 IMPORTANT NOTES                                  "
+    colorized_echo cyan "└─────────────────────────────────────────────────────"
+    echo
+    colorized_echo yellow "   ⚠️  Save your credentials securely!"
+    colorized_echo yellow "   ⚠️  Delete credential files after memorizing"
+    echo
+    
+    if [ "$caddy_installed" = "false" ]; then
+        colorized_echo gray "   💡 No reverse proxy installed"
+        colorized_echo gray "      Panel is only accessible from server (127.0.0.1)"
+        colorized_echo gray "      Install Caddy: $APP_NAME caddy"
+        echo
+    fi
+    
+    # Useful commands
+    colorized_echo cyan "┌─────────────────────────────────────────────────────"
+    colorized_echo cyan "│  🛠️  USEFUL COMMANDS                                 "
+    colorized_echo cyan "└─────────────────────────────────────────────────────"
+    echo
+    echo -e "   \033[38;5;244mStatus:\033[0m         \033[38;5;15m$APP_NAME status\033[0m"
+    echo -e "   \033[38;5;244mLogs:\033[0m           \033[38;5;15m$APP_NAME logs\033[0m"
+    echo -e "   \033[38;5;244mRestart:\033[0m        \033[38;5;15m$APP_NAME restart\033[0m"
+    echo -e "   \033[38;5;244mBackup:\033[0m         \033[38;5;15m$APP_NAME backup\033[0m"
+    
+    if [ "$caddy_installed" = "true" ]; then
+        echo -e "   \033[38;5;244mCaddy logs:\033[0m     \033[38;5;15mdocker logs caddy-remnawave\033[0m"
+    fi
+    
+    echo
+    colorized_echo gray "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    colorized_echo gray "         Developed by GIG.ovh project"
+    colorized_echo gray "         Support: https://gig.ovh"
+    colorized_echo gray "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
 }
 
 # Offer to install Caddy after panel installation
@@ -9551,6 +9705,8 @@ warn_already_installed() {
 install_command() {
     check_running_as_root
     local is_override=false
+    local admin_username=""
+    local admin_password=""
     
     if is_remnawave_installed; then
         warn_already_installed
@@ -9670,9 +9826,9 @@ install_command() {
             
             # Generate admin credentials automatically
             # Username: 10 chars (letters and digits)
-            local admin_username=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+            admin_username=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
             # Password: 24 chars (letters, digits, and safe symbols that won't break JSON)
-            local admin_password=$(tr -dc 'a-zA-Z0-9_-' < /dev/urandom | head -c 24)
+            admin_password=$(tr -dc 'a-zA-Z0-9_-' < /dev/urandom | head -c 24)
             
             colorized_echo blue "Generated admin credentials:"
             echo -e "   \033[1;37mUsername:\033[0m \033[1;32m$admin_username\033[0m"
@@ -9770,6 +9926,9 @@ EOF
         colorized_echo gray "💡 Tip: You can install Caddy later with: $APP_NAME caddy"
         echo
     fi
+    
+    # Display final credentials summary
+    display_final_credentials_summary "$admin_username" "$admin_password" "$FRONT_END_DOMAIN" "$SUB_DOMAIN" "$CUSTOM_SUB_PREFIX"
 }
 
 uninstall_command() {
