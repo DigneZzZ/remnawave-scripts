@@ -6469,7 +6469,7 @@ install_caddy_reverse_proxy() {
     # Determine caddy image based on mode
     local caddy_image="caddy:${CADDY_VERSION}"
     if [ "$secure_mode" = "true" ]; then
-        caddy_image="ghcr.io/remnawave/caddy-with-auth:latest"
+        caddy_image="remnawave/caddy-with-auth:latest"
     fi
     
     # Create .env file
@@ -8064,6 +8064,25 @@ install_remnawave() {
         done
     fi
 
+    # Ask about Caddy installation BEFORE domain input
+    echo
+    colorized_echo white "🌐 Caddy Reverse Proxy"
+    echo "   Caddy provides automatic SSL certificates and can protect your panel."
+    echo "   • Simple mode: Basic reverse proxy with auto SSL"
+    echo "   • Secure mode: Authentication portal (Caddy Security)"
+    echo
+    read -p "Do you want to install Caddy reverse proxy after panel installation? (y/n): " -r INSTALL_CADDY_LATER
+    
+    local validate_dns=false
+    if [[ "$INSTALL_CADDY_LATER" =~ ^[Yy]$ ]]; then
+        validate_dns=true
+        colorized_echo green "✅ Caddy will be installed after panel setup"
+        colorized_echo yellow "⚠️  DNS validation will be performed for your domains"
+    else
+        colorized_echo gray "ℹ️  Caddy installation skipped. You can install it later with: $APP_NAME caddy"
+    fi
+    echo
+
     # Ask for domain names
     while true; do
         read -p "Enter the panel domain (e.g., panel.example.com or * for any domain): " -r FRONT_END_DOMAIN
@@ -8075,8 +8094,8 @@ install_remnawave() {
         elif ! validate_domain "$FRONT_END_DOMAIN" && [[ "$FRONT_END_DOMAIN" != "*" ]]; then
             colorized_echo red "Invalid domain format. Domain should be like: panel.example.com"
         else
-            # Validate DNS for non-wildcard domains
-            if [[ "$FRONT_END_DOMAIN" != "*" ]]; then
+            # Validate DNS only if Caddy will be installed and domain is not wildcard
+            if [[ "$validate_dns" = true ]] && [[ "$FRONT_END_DOMAIN" != "*" ]]; then
                 if ! validate_domain_dns "$FRONT_END_DOMAIN"; then
                     continue
                 fi
@@ -8098,9 +8117,11 @@ install_remnawave() {
         elif ! validate_domain "$SUB_DOMAIN"; then
             colorized_echo red "Invalid domain format. Domain should be like: sub.example.com"
         else
-            # Validate DNS for subscription domain
-            if ! validate_domain_dns "$SUB_DOMAIN"; then
-                continue
+            # Validate DNS only if Caddy will be installed
+            if [[ "$validate_dns" = true ]]; then
+                if ! validate_domain_dns "$SUB_DOMAIN"; then
+                    continue
+                fi
             fi
             break
         fi
@@ -9324,8 +9345,13 @@ EOF
     colorized_echo green "==================================================="
     echo
     
-    # Offer to install Caddy reverse proxy
-    offer_caddy_installation "$FRONT_END_DOMAIN" "$SUB_DOMAIN" "$APP_PORT" "$SUB_PORT" "$CUSTOM_SUB_PREFIX"
+    # Offer to install Caddy reverse proxy (only if user agreed earlier)
+    if [[ "$INSTALL_CADDY_LATER" =~ ^[Yy]$ ]]; then
+        offer_caddy_installation "$FRONT_END_DOMAIN" "$SUB_DOMAIN" "$APP_PORT" "$SUB_PORT" "$CUSTOM_SUB_PREFIX"
+    else
+        colorized_echo gray "💡 Tip: You can install Caddy later with: $APP_NAME caddy"
+        echo
+    fi
 }
 
 uninstall_command() {
