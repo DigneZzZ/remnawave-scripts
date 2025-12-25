@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.0.1
+# VERSION=5.1.0
 
-SCRIPT_VERSION="5.0.1"
-BACKUP_SCRIPT_VERSION="1.1.6"  # Версия backup скрипта создаваемого Schedule функцией
+SCRIPT_VERSION="5.1.0"
+BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
     shift  
@@ -2402,7 +2402,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.1.4"
+BACKUP_SCRIPT_VERSION="1.1.7"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -8517,6 +8517,7 @@ backup_command() {
     local compress=true         # По умолчанию сжимаем бэкап
     local include_configs=true  # По умолчанию полный бэкап
     local data_only=false       # Новый флаг для только БД
+    local include_caddy=false   # Включать Caddy в бэкап
     
     # Парсинг аргументов
     while [[ "$#" -gt 0 ]]; do
@@ -8532,6 +8533,9 @@ backup_command() {
                 include_configs=true 
                 data_only=false
                 ;;
+            --include-caddy|--with-caddy)
+                include_caddy=true
+                ;;
             -h|--help) 
                 echo -e "\033[1;37m💾 Remnawave Backup System\033[0m"
                 echo
@@ -8542,12 +8546,14 @@ backup_command() {
                 echo -e "  \033[38;5;244m--no-compress\033[0m       Create uncompressed backup (default: compressed)"
                 echo -e "  \033[38;5;244m--data-only\033[0m         Backup database only (no configs)"
                 echo -e "  \033[38;5;244m--include-configs\033[0m   Force include configuration files (default)"
+                echo -e "  \033[38;5;244m--include-caddy\033[0m     Include Caddy reverse proxy config (if installed)"
                 echo -e "  \033[38;5;244m--help, -h\033[0m          Show this help"
                 echo
                 echo -e "\033[1;37mExamples:\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup\033[0m                           \033[38;5;8m# Full backup (default)\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --compress\033[0m                \033[38;5;8m# Compressed full backup\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --data-only\033[0m               \033[38;5;8m# Database only\033[0m"
+                echo -e "  \033[38;5;15m$APP_NAME backup --include-caddy\033[0m           \033[38;5;8m# Include Caddy config\033[0m""
                 echo -e "  \033[38;5;15m$APP_NAME backup --data-only --compress\033[0m    \033[38;5;8m# Compressed database only\033[0m"
                 echo
                 echo -e "\033[38;5;8mDefault: Full backup includes database + configuration files\033[0m"
@@ -8691,6 +8697,31 @@ backup_command() {
                 echo -e "\033[38;5;244m   ✓ $dir_name/ ($dir_files files)\033[0m"
             fi
         done
+        
+        # Бэкап Caddy (если установлен и запрошен)
+        if [ "$include_caddy" = true ] && [ -d "$CADDY_DIR" ]; then
+            echo -e "\033[38;5;244m   Backing up Caddy configuration...\033[0m"
+            mkdir -p "$backup_dir/caddy"
+            
+            # Копируем конфиги Caddy (без логов)
+            for caddy_file in "$CADDY_DIR"/*.yml "$CADDY_DIR"/*.yaml "$CADDY_DIR"/.env "$CADDY_DIR"/Caddyfile "$CADDY_DIR"/caddy-credentials.txt; do
+                if [ -f "$caddy_file" ]; then
+                    cp "$caddy_file" "$backup_dir/caddy/" 2>/dev/null || true
+                    config_count=$((config_count + 1))
+                fi
+            done
+            
+            # Определяем режим Caddy
+            local caddy_mode="simple"
+            if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
+                caddy_mode="secure"
+            fi
+            echo "caddy_mode=$caddy_mode" > "$backup_dir/caddy/caddy-info.txt"
+            
+            echo -e "\033[38;5;244m   ✓ caddy/ (mode: $caddy_mode)\033[0m"
+        elif [ "$include_caddy" = true ]; then
+            echo -e "\033[38;5;244m   ⚠️  Caddy not installed, skipping\033[0m"
+        fi
         
         # Создаем метаданные
         echo -e "\033[38;5;250m📝 Step 3:\033[0m Creating backup metadata..."
@@ -9314,6 +9345,17 @@ uninstall_command() {
         exit 1
     fi
     
+    # Спрашиваем про Caddy заранее
+    local remove_caddy=false
+    if is_caddy_installed; then
+        echo
+        colorized_echo yellow "🌐 Caddy Reverse Proxy is also installed at $CADDY_DIR"
+        read -p "Do you also want to remove Caddy? (y/n) "
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            remove_caddy=true
+        fi
+    fi
+    
     # Create safety backup before uninstall
     local backup_timestamp=$(date +%Y%m%d_%H%M%S)
     local backup_dir="$HOME/remnawave-backup-before-uninstall-$backup_timestamp"
@@ -9387,11 +9429,12 @@ uninstall_command() {
         colorized_echo blue "Stopping Caddy..."
         cd "$CADDY_DIR" && docker compose down 2>/dev/null || true
         
-        read -p "Do you also want to remove Caddy reverse proxy? (y/n) "
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ "$remove_caddy" = true ]; then
             colorized_echo yellow "Removing Caddy directory: $CADDY_DIR"
             rm -rf "$CADDY_DIR"
             colorized_echo green "✅ Caddy removed"
+        else
+            colorized_echo gray "Caddy preserved at: $CADDY_DIR"
         fi
     fi
     
