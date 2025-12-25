@@ -6923,8 +6923,16 @@ create_simple_caddyfile() {
 
 # Panel + Subscription on same domain
 https://{\$PANEL_DOMAIN} {
+    # Static assets for subscription page
+    handle /assets/* {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up Host {host}
+        }
+    }
+    
     # Subscription page routes (prefix: /$sub_prefix/)
-    handle_path /${sub_prefix}/* {
+    handle /${sub_prefix}/* {
         reverse_proxy remnawave-subscription-page:{\$SUB_PORT} {
             header_up X-Real-IP {remote_host}
             header_up Host {host}
@@ -7079,8 +7087,13 @@ https://{$REMNAWAVE_PANEL_DOMAIN} {
 EOF
         # Add subscription prefix handling
         cat >> "$CADDY_DIR/Caddyfile" << EOF
+    # Static assets for subscription page
+    handle /assets/* {
+        reverse_proxy remnawave-subscription-page:{\$SUB_PORT}
+    }
+    
     # Subscription page routes (prefix: /${sub_prefix}/)
-    handle_path /${sub_prefix}/* {
+    handle /${sub_prefix}/* {
         reverse_proxy remnawave-subscription-page:{\$SUB_PORT}
     }
 
