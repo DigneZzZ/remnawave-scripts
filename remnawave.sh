@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.7
+# VERSION=5.3.8
 
-SCRIPT_VERSION="5.3.7"
+SCRIPT_VERSION="5.3.8"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -8813,8 +8813,14 @@ up_remnawave_core() {
     $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" stop remnawave-subscription-page >/dev/null 2>&1 || true
     
     # Start only core services (use service names from docker-compose.yml, not container names)
-    # Redirect both stdout and stderr to suppress docker compose progress output
-    $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" up -d remnawave-db remnawave-redis remnawave >/dev/null 2>&1
+    echo
+    if ! $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" up -d remnawave-db remnawave-redis remnawave; then
+        echo
+        colorized_echo red "❌ Failed to start core services!"
+        colorized_echo yellow "Check the error above and try again."
+        return 1
+    fi
+    echo
     
     # Wait for services to be healthy
     local max_wait=60
@@ -8837,6 +8843,7 @@ up_remnawave_core() {
     done
     echo -e "\033[0m"
     colorized_echo yellow "⚠️  Services may still be starting..."
+    colorized_echo yellow "Check service status with: $APP_NAME status"
     return 0
 }
 
@@ -9578,7 +9585,20 @@ install_command() {
     
     # Start only core services first (without subscription-page)
     # subscription-page will be started after API token is configured
-    up_remnawave_core
+    if ! up_remnawave_core; then
+        echo
+        colorized_echo red "==================================================="
+        colorized_echo red "❌ Installation failed - services did not start"
+        colorized_echo red "==================================================="
+        colorized_echo yellow "Possible issues:"
+        colorized_echo yellow "  • Docker service not running"
+        colorized_echo yellow "  • Network connectivity issues"
+        colorized_echo yellow "  • Insufficient system resources"
+        echo
+        colorized_echo yellow "Try to start manually: $APP_NAME up"
+        colorized_echo yellow "Check logs: $APP_NAME logs"
+        exit 1
+    fi
     
     echo
     colorized_echo green "==================================================="
@@ -9686,11 +9706,10 @@ EOF
                     
                     # Recreate subscription-page container to apply token
                     colorized_echo blue "Starting subscription-page with API token..."
-                    $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page 2>/dev/null
+                if $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page; then
                     colorized_echo green "✅ Subscription-page started with API token!"
                 else
-                    colorized_echo yellow "⚠️  Could not create API token automatically."
-                    colorized_echo yellow "You can configure it later: $APP_NAME subpage"
+                    colorized_echo yellow "⚠️  Subscription-page start had issues. Check with: $APP_NAME status"
                 fi
                 
                 # Display credentials summary
