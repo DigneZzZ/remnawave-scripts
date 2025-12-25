@@ -2,11 +2,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-4.0.2-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
 [![Backup & Restore](https://img.shields.io/badge/Tool-Backup%20%26%20Restore-orange)](#-backup--restore-system)
-[![Caddy Selfsteal](https://img.shields.io/badge/Tool-Caddy%20Selfsteal-purple)](#-caddy-selfsteal-for-reality)
+[![Caddy Reverse Proxy](https://img.shields.io/badge/Tool-Caddy%20Proxy-purple)](#-caddy-reverse-proxy)
+[![Caddy Selfsteal](https://img.shields.io/badge/Tool-Caddy%20Selfsteal-blueviolet)](#-caddy-selfsteal-for-reality)
 [![Auto Updates](https://img.shields.io/badge/Feature-Auto%20Updates-green.svg)](#)
 [![Telegram Integration](https://img.shields.io/badge/Feature-Telegram-blue.svg)](#)
 
@@ -27,7 +28,8 @@ A comprehensive collection of enterprise-grade Bash scripts for **Remnawave Pane
 ### Core Installers
 * [🚀 Remnawave Panel Installer](#-remnawave-panel-installer)
 * [🛰 RemnaNode Installer](#-remnanode-installer)
-* [🎭 Caddy Selfsteal for Reality](#-caddy-selfsteal-for-reality)
+* [� Caddy Reverse Proxy](#-caddy-reverse-proxy)
+* [�🎭 Caddy Selfsteal for Reality](#-caddy-selfsteal-for-reality)
 
 ### Backup & Migration System
 * [💾 Backup & Restore System](#-backup--restore-system)
@@ -95,6 +97,16 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 * API token auto-creation for subscription-page
 * Credentials saved to `admin-credentials.txt`
 * Smart detection of fresh install vs override
+
+**🌐 Caddy Reverse Proxy Integration (v5.0.0+)**
+* Built-in Caddy installation option after panel setup
+* **Simple mode**: Basic reverse proxy with auto SSL
+* **Secure mode**: Authentication portal with Caddy Security
+* Automatic DNS validation before SSL certificate issuance
+* Firewall check (UFW/firewalld) with helpful commands
+* Full Caddy management: `caddy up`, `caddy down`, `caddy logs`, `caddy edit`, `caddy reset-user`
+* Auto-generated admin credentials for Secure mode (stored in `.env`)
+* Installed to `/opt/caddy-remnawave/` as Docker container
 
 **📄 Subscription Page v7.0.0+ Support**
 * New `REMNAWAVE_API_TOKEN` configuration
@@ -169,6 +181,18 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 | `subpage-token` | Configure API token | `remnawave subpage-token` |
 | `subpage-restart` | Restart subscription-page container | `remnawave subpage-restart` |
 | `install-subpage` | Install subscription-page only | `remnawave install-subpage` |
+
+#### Caddy Reverse Proxy Management
+| Command | Description | Usage |
+|---------|-------------|-------|
+| `caddy` | Show Caddy status & help | `remnawave caddy` |
+| `caddy up` | Start Caddy container | `remnawave caddy up` |
+| `caddy down` | Stop Caddy container | `remnawave caddy down` |
+| `caddy restart` | Restart Caddy | `remnawave caddy restart` |
+| `caddy logs` | View Caddy logs | `remnawave caddy logs` |
+| `caddy edit` | Edit Caddyfile | `remnawave caddy edit` |
+| `caddy reset-user` | Reset admin password (Secure mode) | `remnawave caddy reset-user` |
+| `caddy uninstall` | Remove Caddy completely | `remnawave caddy uninstall` |
 
 ---
 
@@ -324,6 +348,75 @@ TELEGRAM_NOTIFY_NODES_THREAD_ID=thread_id  # Optional
 
 ---
 
+### 🌐 Caddy Reverse Proxy
+
+Built-in Caddy reverse proxy integration with automatic SSL certificates. Offered during panel installation or can be installed manually.
+
+#### Installation Modes
+
+**Simple Mode** - Basic reverse proxy:
+- Automatic SSL via Let's Encrypt
+- No additional authentication
+- Best for trusted networks or behind another auth layer
+
+**Secure Mode** - With Caddy Security portal:
+- Authentication layer before panel access
+- API routes (`/api/*`) remain open for integrations
+- Optional MFA support
+- Based on [Caddy Security](https://docs.rw/docs/security/caddy-with-minimal-setup)
+
+#### Quick Setup
+
+```bash
+# Caddy is offered automatically after panel installation
+remnawave install
+
+# Or manage existing Caddy installation
+remnawave caddy status
+remnawave caddy up
+remnawave caddy restart
+remnawave caddy logs
+```
+
+#### Pre-installation Checks
+
+The installer automatically validates:
+- **DNS records** - Domains must point to this server
+- **Firewall ports** - Ports 80/443 must be open (UFW/firewalld)
+- **Existing web servers** - Detects nginx, apache, traefik
+
+```bash
+# If UFW is blocking ports:
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+# If firewalld is blocking:
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+#### File Structure
+
+```text
+/opt/caddy-remnawave/
+├── docker-compose.yml    # Caddy container config
+├── Caddyfile            # Caddy configuration
+├── .env                 # Environment variables
+└── data/                # SSL certificates & state
+    ├── caddy/
+    └── config/
+```
+
+#### Configuration
+
+Edit Caddyfile manually:
+```bash
+remnawave caddy edit
+remnawave caddy restart
+```
+
+**Documentation:** https://docs.rw/docs/install/reverse-proxies/
 
 ---
 
