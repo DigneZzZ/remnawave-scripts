@@ -3,7 +3,7 @@
 # This script installs and manages Remnawave Panel
 # VERSION=5.1.1
 
-SCRIPT_VERSION="5.1.1"
+SCRIPT_VERSION="5.3.0"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -77,6 +77,204 @@ SUB_ENV_FILE="$APP_DIR/.env.subscription"
 BACKUP_CONFIG_FILE="$APP_DIR/backup-config.json"
 BACKUP_SCRIPT_FILE="$APP_DIR/backup-scheduler.sh"
 BACKUP_LOG_FILE="$APP_DIR/logs/backup.log"
+LANG_CONFIG_FILE="$APP_DIR/.menu-lang"
+
+# ===== LOCALIZATION SYSTEM =====
+
+# Default language
+MENU_LANG="en"
+
+# Load saved language preference
+load_menu_language() {
+    if [ -f "$LANG_CONFIG_FILE" ]; then
+        local saved_lang=$(cat "$LANG_CONFIG_FILE" 2>/dev/null | tr -d '[:space:]')
+        if [ "$saved_lang" = "ru" ] || [ "$saved_lang" = "en" ]; then
+            MENU_LANG="$saved_lang"
+        fi
+    fi
+}
+
+# Save language preference
+save_menu_language() {
+    local lang="$1"
+    mkdir -p "$(dirname "$LANG_CONFIG_FILE")" 2>/dev/null
+    echo "$lang" > "$LANG_CONFIG_FILE" 2>/dev/null
+    MENU_LANG="$lang"
+}
+
+# Get localized string
+L() {
+    local key="$1"
+    local var_name="L_${MENU_LANG}_${key}"
+    echo "${!var_name:-$key}"
+}
+
+# ===== ENGLISH STRINGS =====
+# Main Menu
+L_en_MENU_TITLE="Main Menu"
+L_en_MENU_STATUS_MONITORING="Status & Monitoring"
+L_en_MENU_SERVICES_CONTROL="Services Control"
+L_en_MENU_REVERSE_PROXY="Reverse Proxy"
+L_en_MENU_SUBSCRIPTION="Subscription Page"
+L_en_MENU_BACKUP="Backup & Restore"
+L_en_MENU_INSTALLATION="Installation"
+L_en_MENU_ADVANCED="Advanced"
+L_en_MENU_EXIT="Exit to terminal"
+L_en_MENU_SELECT="Select option"
+L_en_MENU_LANG_SWITCH="Language: English"
+
+# Status & Monitoring submenu
+L_en_SUB_STATUS="Services status"
+L_en_SUB_LOGS="View logs"
+L_en_SUB_HEALTH="Health check"
+L_en_SUB_MONITOR="Performance monitor"
+L_en_SUB_BACK="Back to main menu"
+
+# Services Control submenu
+L_en_SVC_START="Start all services"
+L_en_SVC_STOP="Stop all services"
+L_en_SVC_RESTART="Restart all services"
+L_en_SVC_TITLE="Services Control"
+
+# Installation submenu
+L_en_INST_INSTALL="Install Remnawave panel"
+L_en_INST_UPDATE="Update to latest version"
+L_en_INST_UNINSTALL="Remove panel completely"
+L_en_INST_TITLE="Installation & Updates"
+
+# Backup submenu
+L_en_BAK_MANUAL="Manual backup"
+L_en_BAK_SCHEDULE="Scheduled backups"
+L_en_BAK_RESTORE="Restore from backup"
+
+# Caddy
+L_en_CADDY_MANAGEMENT="Caddy management"
+L_en_CADDY_INSTALL="Install Caddy reverse proxy"
+L_en_CADDY_RUNNING="Running"
+L_en_CADDY_STOPPED="Stopped"
+L_en_CADDY_TITLE="Caddy Reverse Proxy Management"
+L_en_CADDY_STATUS="Current Status"
+L_en_CADDY_CONTAINER="Container"
+L_en_CADDY_MODE="Mode"
+L_en_CADDY_MODE_SIMPLE="Simple"
+L_en_CADDY_MODE_SECURE="Secure (with auth)"
+L_en_CADDY_PANEL="Panel"
+L_en_CADDY_SUBSCRIPTION="Subscription"
+L_en_CADDY_ACTIONS="Actions"
+L_en_CADDY_SHOW_STATUS="Show detailed status"
+L_en_CADDY_START="Start Caddy"
+L_en_CADDY_STOP="Stop Caddy"
+L_en_CADDY_RESTART="Restart Caddy"
+L_en_CADDY_LOGS="View logs"
+L_en_CADDY_EDIT="Edit Caddyfile"
+L_en_CADDY_RESET_PASS="Reset admin password"
+L_en_CADDY_RESET_SECURE_ONLY="Reset admin password (Secure mode only)"
+L_en_CADDY_UNINSTALL="Uninstall Caddy"
+L_en_CADDY_NOT_INSTALLED="Not installed"
+
+# Advanced
+L_en_ADV_EDIT="Edit configuration files"
+L_en_ADV_SHELL="Access container shell"
+L_en_ADV_PM2="PM2 process monitor"
+
+# Panel Status
+L_en_PANEL_RUNNING="Panel Status: RUNNING"
+L_en_PANEL_STOPPED="Panel Status: STOPPED"
+L_en_PANEL_NOT_INSTALLED="Panel Status: NOT INSTALLED"
+L_en_PANEL_VERSION="Version"
+L_en_PANEL_ACCESS_URLS="Access URLs"
+L_en_PANEL_ADMIN="Admin Panel"
+L_en_PANEL_SUBSCRIPTIONS="Subscriptions"
+L_en_SERVICES_STATUS="Services Status"
+L_en_RESOURCE_USAGE="Resource Usage"
+L_en_BACKUP_STATUS="Backup Status"
+L_en_INVALID_OPTION="Invalid option!"
+L_en_PRESS_ENTER="Press Enter to continue..."
+
+# ===== RUSSIAN STRINGS =====
+# Main Menu
+L_ru_MENU_TITLE="Главное меню"
+L_ru_MENU_STATUS_MONITORING="Статус и мониторинг"
+L_ru_MENU_SERVICES_CONTROL="Управление сервисами"
+L_ru_MENU_REVERSE_PROXY="Reverse Proxy"
+L_ru_MENU_SUBSCRIPTION="Страница подписки"
+L_ru_MENU_BACKUP="Бэкап и восстановление"
+L_ru_MENU_INSTALLATION="Установка"
+L_ru_MENU_ADVANCED="Дополнительно"
+L_ru_MENU_EXIT="Выход"
+L_ru_MENU_SELECT="Выберите опцию"
+L_ru_MENU_LANG_SWITCH="Язык: Русский"
+
+# Status & Monitoring submenu
+L_ru_SUB_STATUS="Статус сервисов"
+L_ru_SUB_LOGS="Просмотр логов"
+L_ru_SUB_HEALTH="Диагностика"
+L_ru_SUB_MONITOR="Монитор производительности"
+L_ru_SUB_BACK="Назад в главное меню"
+
+# Services Control submenu
+L_ru_SVC_START="Запустить все сервисы"
+L_ru_SVC_STOP="Остановить все сервисы"
+L_ru_SVC_RESTART="Перезапустить все сервисы"
+L_ru_SVC_TITLE="Управление сервисами"
+
+# Installation submenu
+L_ru_INST_INSTALL="Установить панель Remnawave"
+L_ru_INST_UPDATE="Обновить до последней версии"
+L_ru_INST_UNINSTALL="Удалить панель полностью"
+L_ru_INST_TITLE="Установка и обновление"
+
+# Backup submenu
+L_ru_BAK_MANUAL="Ручной бэкап"
+L_ru_BAK_SCHEDULE="Автоматические бэкапы"
+L_ru_BAK_RESTORE="Восстановить из бэкапа"
+
+# Caddy
+L_ru_CADDY_MANAGEMENT="Управление Caddy"
+L_ru_CADDY_INSTALL="Установить Caddy reverse proxy"
+L_ru_CADDY_RUNNING="Работает"
+L_ru_CADDY_STOPPED="Остановлен"
+L_ru_CADDY_TITLE="Управление Caddy Reverse Proxy"
+L_ru_CADDY_STATUS="Текущий статус"
+L_ru_CADDY_CONTAINER="Контейнер"
+L_ru_CADDY_MODE="Режим"
+L_ru_CADDY_MODE_SIMPLE="Простой"
+L_ru_CADDY_MODE_SECURE="Защищённый (с авторизацией)"
+L_ru_CADDY_PANEL="Панель"
+L_ru_CADDY_SUBSCRIPTION="Подписки"
+L_ru_CADDY_ACTIONS="Действия"
+L_ru_CADDY_SHOW_STATUS="Показать детальный статус"
+L_ru_CADDY_START="Запустить Caddy"
+L_ru_CADDY_STOP="Остановить Caddy"
+L_ru_CADDY_RESTART="Перезапустить Caddy"
+L_ru_CADDY_LOGS="Просмотр логов"
+L_ru_CADDY_EDIT="Редактировать Caddyfile"
+L_ru_CADDY_RESET_PASS="Сбросить пароль админа"
+L_ru_CADDY_RESET_SECURE_ONLY="Сброс пароля (только Secure режим)"
+L_ru_CADDY_UNINSTALL="Удалить Caddy"
+L_ru_CADDY_NOT_INSTALLED="Не установлен"
+
+# Advanced
+L_ru_ADV_EDIT="Редактировать конфиги"
+L_ru_ADV_SHELL="Доступ к контейнеру"
+L_ru_ADV_PM2="PM2 монитор"
+
+# Panel Status
+L_ru_PANEL_RUNNING="Статус панели: РАБОТАЕТ"
+L_ru_PANEL_STOPPED="Статус панели: ОСТАНОВЛЕНА"
+L_ru_PANEL_NOT_INSTALLED="Статус панели: НЕ УСТАНОВЛЕНА"
+L_ru_PANEL_VERSION="Версия"
+L_ru_PANEL_ACCESS_URLS="URL доступа"
+L_ru_PANEL_ADMIN="Админ-панель"
+L_ru_PANEL_SUBSCRIPTIONS="Подписки"
+L_ru_SERVICES_STATUS="Статус сервисов"
+L_ru_RESOURCE_USAGE="Использование ресурсов"
+L_ru_BACKUP_STATUS="Статус бэкапов"
+L_ru_INVALID_OPTION="Неверная опция!"
+L_ru_PRESS_ENTER="Нажмите Enter для продолжения..."
+
+# Load language on script start
+load_menu_language
 
 # ===== BACKUP SCRIPT VERSION CHECK FUNCTIONS =====
 
@@ -7255,15 +7453,25 @@ caddy_status_command() {
         fi
     fi
     
-    # Show domains from Caddyfile
-    if [ -f "$CADDY_DIR/Caddyfile" ]; then
-        local domains=$(grep -E "^[a-zA-Z0-9].*\{" "$CADDY_DIR/Caddyfile" 2>/dev/null | sed 's/ {$//' | head -5)
-        if [ -n "$domains" ]; then
+    # Show domains from .env or Caddyfile
+    if [ -f "$CADDY_DIR/.env" ]; then
+        local panel_domain=$(grep "^PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        local sub_domain=$(grep "^SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        
+        # Fallback to REMNAWAVE_PANEL_DOMAIN for secure mode
+        if [ -z "$panel_domain" ]; then
+            panel_domain=$(grep "^REMNAWAVE_PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        fi
+        
+        if [ -n "$panel_domain" ] || [ -n "$sub_domain" ]; then
             echo
             echo -e "\033[1;37m   Configured domains:\033[0m"
-            echo "$domains" | while read -r domain; do
-                echo "     • https://$domain"
-            done
+            if [ -n "$panel_domain" ]; then
+                echo "     • https://$panel_domain"
+            fi
+            if [ -n "$sub_domain" ] && [ "$sub_domain" != "$panel_domain" ]; then
+                echo "     • https://$sub_domain"
+            fi
         fi
     fi
     
@@ -7500,6 +7708,119 @@ caddy_command() {
             echo
             ;;
     esac
+}
+
+# Caddy management menu for interactive mode
+caddy_menu() {
+    while true; do
+        clear
+        echo -e "\033[1;37m🌐 $(L CADDY_TITLE)\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo
+        
+        # Check if Caddy is installed
+        if ! is_caddy_installed; then
+            echo -e "\033[1;37m📊 $(L CADDY_STATUS):\033[0m \033[1;33m⚠️  $(L CADDY_NOT_INSTALLED)\033[0m"
+            echo
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+            echo
+            echo -e "   \033[38;5;15m1)\033[0m 📦 $(L CADDY_INSTALL)"
+            echo
+            echo -e "   \033[38;5;244m0)\033[0m ⬅️  $(L SUB_BACK)"
+            echo
+            
+            read -p "$(echo -e "\033[1;37m$(L MENU_SELECT) [0-1]:\033[0m ")" choice
+            
+            case "$choice" in
+                1) install_caddy_reverse_proxy; read -p "$(L PRESS_ENTER)" ;;
+                0) return 0 ;;
+                *)
+                    echo -e "\033[1;31m$(L INVALID_OPTION)\033[0m"
+                    sleep 1
+                    ;;
+            esac
+            continue
+        fi
+        
+        # Caddy is installed - show full menu
+        echo -e "\033[1;37m📊 $(L CADDY_STATUS):\033[0m"
+        
+        # Show running status
+        if is_caddy_up; then
+            echo -e "   \033[38;5;15m$(L CADDY_CONTAINER):\033[0m      \033[1;32m✅ $(L CADDY_RUNNING)\033[0m"
+        else
+            echo -e "   \033[38;5;15m$(L CADDY_CONTAINER):\033[0m      \033[1;31m❌ $(L CADDY_STOPPED)\033[0m"
+        fi
+        
+        # Check mode (Simple or Secure)
+        local caddy_mode="simple"
+        local caddy_mode_display="$(L CADDY_MODE_SIMPLE)"
+        if [ -f "$CADDY_DIR/.env" ]; then
+            if grep -q "^AUTHP_ADMIN_USER=" "$CADDY_DIR/.env" 2>/dev/null; then
+                caddy_mode="secure"
+                caddy_mode_display="$(L CADDY_MODE_SECURE)"
+            fi
+        fi
+        echo -e "   \033[38;5;15m$(L CADDY_MODE):\033[0m           \033[38;5;117m$caddy_mode_display\033[0m"
+        
+        # Show domains
+        if [ -f "$CADDY_DIR/.env" ]; then
+            local panel_domain=$(grep "^REMNAWAVE_PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            local sub_domain=$(grep "^REMNAWAVE_SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            if [ -n "$panel_domain" ]; then
+                echo -e "   \033[38;5;15m$(L CADDY_PANEL):\033[0m          \033[38;5;117mhttps://$panel_domain\033[0m"
+            fi
+            if [ -n "$sub_domain" ] && [ "$sub_domain" != "$panel_domain" ]; then
+                echo -e "   \033[38;5;15m$(L CADDY_SUBSCRIPTION):\033[0m   \033[38;5;117mhttps://$sub_domain\033[0m"
+            fi
+        fi
+        
+        echo
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo
+        echo -e "\033[1;37m🔧 $(L CADDY_ACTIONS):\033[0m"
+        echo -e "   \033[38;5;15m1)\033[0m 📊 $(L CADDY_SHOW_STATUS)"
+        echo -e "   \033[38;5;15m2)\033[0m ▶️  $(L CADDY_START)"
+        echo -e "   \033[38;5;15m3)\033[0m ⏹️  $(L CADDY_STOP)"
+        echo -e "   \033[38;5;15m4)\033[0m 🔄 $(L CADDY_RESTART)"
+        echo -e "   \033[38;5;15m5)\033[0m 📋 $(L CADDY_LOGS)"
+        echo -e "   \033[38;5;15m6)\033[0m 📝 $(L CADDY_EDIT)"
+        if [ "$caddy_mode" = "secure" ]; then
+            echo -e "   \033[38;5;15m7)\033[0m 🔑 $(L CADDY_RESET_PASS)"
+        else
+            echo -e "   \033[38;5;8m7)\033[0m \033[38;5;8m🔑 $(L CADDY_RESET_SECURE_ONLY)\033[0m"
+        fi
+        echo -e "   \033[38;5;15m8)\033[0m 🗑️  $(L CADDY_UNINSTALL)"
+        echo
+        echo -e "   \033[38;5;244m0)\033[0m ⬅️  $(L SUB_BACK)"
+        echo
+        
+        read -p "$(echo -e "\033[1;37m$(L MENU_SELECT) [0-8]:\033[0m ")" choice
+        
+        case "$choice" in
+            1) caddy_status_command; read -p "$(L PRESS_ENTER)" ;;
+            2) caddy_up_command; read -p "$(L PRESS_ENTER)" ;;
+            3) caddy_down_command; read -p "$(L PRESS_ENTER)" ;;
+            4) caddy_restart_command; read -p "$(L PRESS_ENTER)" ;;
+            5) caddy_logs_command ;;
+            6) caddy_edit_command; read -p "$(L PRESS_ENTER)" ;;
+            7)
+                if [ "$caddy_mode" = "secure" ]; then
+                    caddy_reset_user_command
+                    read -p "$(L PRESS_ENTER)"
+                else
+                    colorized_echo yellow "⚠️  $(L CADDY_RESET_SECURE_ONLY)"
+                    read -p "$(L PRESS_ENTER)"
+                fi
+                ;;
+            8) caddy_uninstall_command; read -p "$(L PRESS_ENTER)" ;;
+            0) return 0 ;;
+            *)
+                echo -e "\033[1;31m$(L INVALID_OPTION)\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # ===== REMNAWAVE API FUNCTIONS =====
@@ -10658,197 +10979,211 @@ pm2_monitor() {
 main_menu() {
     while true; do
         clear
-        echo -e "\033[1;37m⚡ $APP_NAME Panel Management\033[0m \033[38;5;244mv$SCRIPT_VERSION\033[0m"
+        # Header with language indicator
+        local lang_indicator="🇬🇧"
+        [ "$MENU_LANG" = "ru" ] && lang_indicator="🇷🇺"
+        
+        echo -e "\033[1;37m⚡ $APP_NAME Panel Management\033[0m \033[38;5;244mv$SCRIPT_VERSION\033[0m  $lang_indicator"
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
         echo
         
-        # Проверка статуса панели
+        # Panel status display
         if is_remnawave_installed; then
             if is_remnawave_up; then
-                echo -e "\033[1;32m✅ Panel Status: RUNNING\033[0m"
+                echo -e "\033[1;32m✅ $(L PANEL_RUNNING)\033[0m"
                 
                 if [ -f "$ENV_FILE" ]; then
-
                     local panel_domain=$(grep "FRONT_END_DOMAIN=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" | xargs 2>/dev/null)
                     local sub_domain=$(grep "SUB_PUBLIC_DOMAIN=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" | xargs 2>/dev/null)
                     
-                    echo
-                    echo -e "\033[1;37m🌐 Access URLs:\033[0m"
-                    
-                    local domains_found=0
-                    
-                    # Panel Domain (FRONT_END_DOMAIN)
                     if [ -n "$panel_domain" ] && [ "$panel_domain" != "null" ]; then
-                        domains_found=$((domains_found + 1))
-                        if [[ "$panel_domain" =~ ^https?:// ]]; then
-                            printf "   \033[38;5;15m📊 Admin Panel:\033[0m    \033[38;5;117m%s\033[0m\n" "$panel_domain"
-                        else
-                            printf "   \033[38;5;15m📊 Admin Panel:\033[0m    \033[38;5;117mhttps://%s\033[0m\n" "$panel_domain"
-                        fi
-                    fi
-                    
-                    # Subscription Domain (SUB_PUBLIC_DOMAIN)
-                    if [ -n "$sub_domain" ] && [ "$sub_domain" != "null" ]; then
-                        domains_found=$((domains_found + 1))
-                        if [[ "$sub_domain" =~ ^https?:// ]]; then
-                            printf "   \033[38;5;15m📄 Subscriptions:\033[0m   \033[38;5;117m%s\033[0m\n" "$sub_domain"
-                        else
-                            printf "   \033[38;5;15m📄 Subscriptions:\033[0m   \033[38;5;117mhttps://%s\033[0m\n" "$sub_domain"
-                        fi
-                    fi
-                    
-                    echo
-                    if [ "$domains_found" -gt 0 ]; then
-                        echo -e "\033[38;5;32m✅ Domains configured - Panel accessible via HTTPS\033[0m"
-                    else
-                        echo -e "\033[1;33m⚠️  No domains configured - Panel not accessible!\033[0m"
                         echo
-                        echo -e "\033[1;37m🔧 Setup Required:\033[0m"
-                        echo -e "\033[38;5;244m   1. Configure reverse proxy (nginx/cloudflare)\033[0m"
-                        echo -e "\033[38;5;244m   2. Set domains in environment (option 13)\033[0m"
-                        echo -e "\033[38;5;244m   3. Configure SSL certificates\033[0m"
-                    fi
-                fi
-                
-                # Показываем статус сервисов
-                echo
-                echo -e "\033[1;37m🔧 Services Status:\033[0m"
-                detect_compose
-                cd "$APP_DIR" 2>/dev/null || true
-                local services_status=$($COMPOSE -f "$COMPOSE_FILE" ps --format "table" 2>/dev/null || echo "")
-                
-                if [ -n "$services_status" ]; then
-                    # Подсчитываем сервисы
-                    local total_services=$(echo "$services_status" | tail -n +2 | wc -l)
-                    local running_services=$(echo "$services_status" | tail -n +2 | grep -c "Up" || echo "0")
-                    local healthy_services=$(echo "$services_status" | tail -n +2 | grep -c "healthy" || echo "0")
-                    
-                    printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s/%s running\033[0m\n" "Total Services:" "$running_services" "$total_services"
-                    if [ "$healthy_services" -gt 0 ]; then
-                        printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s healthy\033[0m\n" "Health Checks:" "$healthy_services"
-                    fi
-                fi
-                
-                # Показываем использование ресурсов
-                echo
-                echo -e "\033[1;37m💾 Resource Usage:\033[0m"
-                
-                # CPU и Memory
-                local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 2>/dev/null || echo "N/A")
-                local mem_info=$(free -h | grep "Mem:" 2>/dev/null)
-                local mem_used=$(echo "$mem_info" | awk '{print $3}' 2>/dev/null || echo "N/A")
-                local mem_total=$(echo "$mem_info" | awk '{print $2}' 2>/dev/null || echo "N/A")
-                
-                printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s%%\033[0m\n" "CPU Usage:" "$cpu_usage"
-                printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s / %s\033[0m\n" "Memory Usage:" "$mem_used" "$mem_total"
-                
-                # Дисковое пространство
-                local disk_usage=$(df -h "$APP_DIR" 2>/dev/null | tail -1 | awk '{print $5}' | sed 's/%//' 2>/dev/null || echo "N/A")
-                local disk_available=$(df -h "$APP_DIR" 2>/dev/null | tail -1 | awk '{print $4}' 2>/dev/null || echo "N/A")
-                
-                printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s%% used, %s available\033[0m\n" "Disk Usage:" "$disk_usage" "$disk_available"
-                
-                # Информация о бэкапах
-                if [ -f "$BACKUP_CONFIG_FILE" ]; then
-                    echo
-                    echo -e "\033[1;37m📅 Backup Status:\033[0m"
-                    local backup_enabled=$(jq -r '.telegram.enabled // false' "$BACKUP_CONFIG_FILE" 2>/dev/null)
-                    local backup_schedule=$(jq -r '.schedule // "Not configured"' "$BACKUP_CONFIG_FILE" 2>/dev/null)
-                    local scheduler_status=$(schedule_get_status 2>/dev/null || echo "disabled")
-                    
-                    printf "   \033[38;5;15m%-15s\033[0m " "Scheduler:"
-                    if [ "$scheduler_status" = "enabled" ]; then
-                        echo -e "\033[1;32m✅ Enabled\033[0m"
-                    else
-                        echo -e "\033[1;31m❌ Disabled\033[0m"
-                    fi
-                    
-                    printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Schedule:" "$backup_schedule"
-                    printf "   \033[38;5;15m%-15s\033[0m " "Telegram:"
-                    if [ "$backup_enabled" = "true" ]; then
-                        echo -e "\033[1;32m✅ Enabled\033[0m"
-                    else
-                        echo -e "\033[38;5;244m❌ Disabled\033[0m"
-                    fi
-                    
-                    # Последний бэкап
-                    if [ -d "$APP_DIR/backups" ]; then
-                        local last_backup=$(ls -t "$APP_DIR/backups"/*.sql* 2>/dev/null | head -1)
-                        if [ -n "$last_backup" ]; then
-                            local backup_date=$(stat -c %y "$last_backup" 2>/dev/null | cut -d' ' -f1,2 | cut -d'.' -f1)
-                            printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Last Backup:" "$backup_date"
+                        echo -e "\033[1;37m🌐 $(L PANEL_ACCESS_URLS):\033[0m"
+                        if [[ "$panel_domain" =~ ^https?:// ]]; then
+                            printf "   \033[38;5;15m📊 $(L PANEL_ADMIN):\033[0m    \033[38;5;117m%s\033[0m\n" "$panel_domain"
+                        else
+                            printf "   \033[38;5;15m📊 $(L PANEL_ADMIN):\033[0m    \033[38;5;117mhttps://%s\033[0m\n" "$panel_domain"
+                        fi
+                        if [ -n "$sub_domain" ] && [ "$sub_domain" != "null" ]; then
+                            if [[ "$sub_domain" =~ ^https?:// ]]; then
+                                printf "   \033[38;5;15m📄 $(L PANEL_SUBSCRIPTIONS):\033[0m \033[38;5;117m%s\033[0m\n" "$sub_domain"
+                            else
+                                printf "   \033[38;5;15m📄 $(L PANEL_SUBSCRIPTIONS):\033[0m \033[38;5;117mhttps://%s\033[0m\n" "$sub_domain"
+                            fi
                         fi
                     fi
                 fi
-                
             else
-                echo -e "\033[1;31m❌ Panel Status: STOPPED\033[0m"
-                echo -e "\033[38;5;244m   Services are installed but not running\033[0m"
-                echo -e "\033[38;5;244m   Use option 4 to start services\033[0m"
+                echo -e "\033[1;31m❌ $(L PANEL_STOPPED)\033[0m"
             fi
         else
-            echo -e "\033[1;33m⚠️  Panel Status: NOT INSTALLED\033[0m"
-            echo -e "\033[38;5;244m   Use option 1 to install Remnawave Panel\033[0m"
+            echo -e "\033[1;33m⚠️  $(L PANEL_NOT_INSTALLED)\033[0m"
         fi
         
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
         echo
-        echo -e "\033[1;37m🚀 Installation & Updates:\033[0m"
-        echo -e "   \033[38;5;15m1)\033[0m 🛠️  Install Remnawave panel"
-        echo -e "   \033[38;5;15m2)\033[0m ⬆️  Update to latest version"
-        echo -e "   \033[38;5;15m3)\033[0m 🗑️  Remove panel completely"
+        
+        # Menu sections
+        echo -e "\033[1;37m📊 $(L MENU_STATUS_MONITORING):\033[0m"
+        echo -e "   \033[38;5;15m1)\033[0m 📊 $(L SUB_STATUS)"
+        echo -e "   \033[38;5;15m2)\033[0m 📋 $(L SUB_LOGS)"
+        echo -e "   \033[38;5;15m3)\033[0m 🩺 $(L SUB_HEALTH)"
+        echo -e "   \033[38;5;15m4)\033[0m 📈 $(L SUB_MONITOR)"
         echo
-        echo -e "\033[1;37m⚙️  Service Management:\033[0m"
-        echo -e "   \033[38;5;15m4)\033[0m ▶️  Start all services"
-        echo -e "   \033[38;5;15m5)\033[0m ⏹️  Stop all services"
-        echo -e "   \033[38;5;15m6)\033[0m 🔄 Restart all services"
-        echo -e "   \033[38;5;15m7)\033[0m 📊 Show services status"
+        
+        echo -e "\033[1;37m⚙️  $(L MENU_SERVICES_CONTROL):\033[0m"
+        echo -e "   \033[38;5;15m5)\033[0m ⚙️  $(L MENU_SERVICES_CONTROL) →"
         echo
-        echo -e "\033[1;37m📊 Monitoring & Logs:\033[0m"
-        echo -e "   \033[38;5;15m8)\033[0m 📋 View application logs"
-        echo -e "   \033[38;5;15m9)\033[0m 📈 System performance monitor"
-        echo -e "   \033[38;5;15m10)\033[0m 🩺 Health check diagnostics"
+        
+        echo -e "\033[1;37m🌐 $(L MENU_REVERSE_PROXY):\033[0m"
+        if is_caddy_installed; then
+            if is_caddy_up; then
+                echo -e "   \033[38;5;15m6)\033[0m 🌐 $(L CADDY_MANAGEMENT) → \033[1;32m($(L CADDY_RUNNING))\033[0m"
+            else
+                echo -e "   \033[38;5;15m6)\033[0m 🌐 $(L CADDY_MANAGEMENT) → \033[1;31m($(L CADDY_STOPPED))\033[0m"
+            fi
+        else
+            echo -e "   \033[38;5;15m6)\033[0m 🌐 $(L CADDY_INSTALL)"
+        fi
         echo
-        echo -e "\033[1;37m💾 Backup & Restore:\033[0m"
-        echo -e "   \033[38;5;15m11)\033[0m 💾 Manual backup"
-        echo -e "   \033[38;5;15m12)\033[0m 📅 Automatic backups (Schedule)"
-        echo -e "   \033[38;5;15m13)\033[0m 🔄 Restore from backup"
+        
+        echo -e "\033[1;37m📄 $(L MENU_SUBSCRIPTION):\033[0m"
+        echo -e "   \033[38;5;15m7)\033[0m 📄 $(L MENU_SUBSCRIPTION) →"
         echo
-        echo -e "\033[1;37m🔧 Configuration & Access:\033[0m"
-        echo -e "   \033[38;5;15m14)\033[0m 📄 Subscription Page settings"
-        echo -e "   \033[38;5;15m15)\033[0m 📝 Edit configuration files"
-        echo -e "   \033[38;5;15m16)\033[0m 🖥️  Access container shell"
-        echo -e "   \033[38;5;15m17)\033[0m 📊 PM2 process monitor"
+        
+        echo -e "\033[1;37m💾 $(L MENU_BACKUP):\033[0m"
+        echo -e "   \033[38;5;15m8)\033[0m 💾 $(L BAK_MANUAL)"
+        echo -e "   \033[38;5;15m9)\033[0m 📅 $(L BAK_SCHEDULE) →"
+        echo -e "   \033[38;5;15m10)\033[0m 🔄 $(L BAK_RESTORE)"
         echo
+        
+        echo -e "\033[1;37m🛠️  $(L MENU_INSTALLATION):\033[0m"
+        echo -e "   \033[38;5;15m11)\033[0m 🛠️  $(L MENU_INSTALLATION) →"
+        echo
+        
+        echo -e "\033[1;37m⚙️  $(L MENU_ADVANCED):\033[0m"
+        echo -e "   \033[38;5;15m12)\033[0m 📝 $(L ADV_EDIT) →"
+        echo -e "   \033[38;5;15m13)\033[0m 🖥️  $(L ADV_SHELL)"
+        echo -e "   \033[38;5;15m14)\033[0m 📊 $(L ADV_PM2)"
+        echo
+        
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
-        echo -e "\033[38;5;15m   0)\033[0m 🚪 Exit to terminal"
+        echo -e "   \033[38;5;15mL)\033[0m 🌐 $(L MENU_LANG_SWITCH)"
+        echo -e "   \033[38;5;15m0)\033[0m 🚪 $(L MENU_EXIT)"
         echo
         echo -e "\033[38;5;8mRemnawave Panel CLI v$SCRIPT_VERSION by DigneZzZ • gig.ovh\033[0m"
         echo
-        read -p "$(echo -e "\033[1;37mSelect option [0-17]:\033[0m ")" choice
+        read -p "$(echo -e "\033[1;37m$(L MENU_SELECT) [0-14, L]:\033[0m ")" choice
 
         case "$choice" in
-            1) install_command; read -p "Press Enter to continue..." ;;
-            2) update_command; read -p "Press Enter to continue..." ;;
-            3) uninstall_command; read -p "Press Enter to continue..." ;;
-            4) up_command; read -p "Press Enter to continue..." ;;
-            5) down_command; read -p "Press Enter to continue..." ;;
-            6) restart_command; read -p "Press Enter to continue..." ;;
-            7) status_command; read -p "Press Enter to continue..." ;;
-            8) logs_command ;;
-            9) monitor_command ;;
-            10) health_check_command; read -p "Press Enter to continue..." ;;
-            11) backup_command; read -p "Press Enter to continue..." ;;
-            12) schedule_menu ;;
-            13) restore_command; read -p "Press Enter to continue..." ;;  
-            14) subpage_menu ;;  
-            15) edit_command_menu ;;  
-            16) console_command ;;
-            17) pm2_monitor ;;
+            1) status_command; read -p "$(L PRESS_ENTER)" ;;
+            2) logs_command ;;
+            3) health_check_command; read -p "$(L PRESS_ENTER)" ;;
+            4) monitor_command ;;
+            5) services_control_menu ;;
+            6)
+                if is_caddy_installed; then
+                    caddy_menu
+                else
+                    install_caddy_reverse_proxy
+                    read -p "$(L PRESS_ENTER)"
+                fi
+                ;;
+            7) subpage_menu ;;
+            8) backup_command; read -p "$(L PRESS_ENTER)" ;;
+            9) schedule_menu ;;
+            10) restore_command; read -p "$(L PRESS_ENTER)" ;;
+            11) installation_menu ;;
+            12) edit_command_menu ;;
+            13) console_command ;;
+            14) pm2_monitor ;;
+            [Ll]) 
+                if [ "$MENU_LANG" = "en" ]; then
+                    save_menu_language "ru"
+                else
+                    save_menu_language "en"
+                fi
+                ;;
             0) clear; exit 0 ;;
             *) 
-                echo -e "\033[1;31mInvalid option!\033[0m"
+                echo -e "\033[1;31m$(L INVALID_OPTION)\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Services Control submenu
+services_control_menu() {
+    while true; do
+        clear
+        echo -e "\033[1;37m⚙️  $(L SVC_TITLE)\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 40))\033[0m"
+        echo
+        
+        # Show current status
+        if is_remnawave_up; then
+            echo -e "   \033[38;5;15mStatus:\033[0m \033[1;32m✅ Running\033[0m"
+        else
+            echo -e "   \033[38;5;15mStatus:\033[0m \033[1;31m❌ Stopped\033[0m"
+        fi
+        echo
+        
+        echo -e "   \033[38;5;15m1)\033[0m ▶️  $(L SVC_START)"
+        echo -e "   \033[38;5;15m2)\033[0m ⏹️  $(L SVC_STOP)"
+        echo -e "   \033[38;5;15m3)\033[0m 🔄 $(L SVC_RESTART)"
+        echo
+        echo -e "   \033[38;5;244m0)\033[0m ⬅️  $(L SUB_BACK)"
+        echo
+        
+        read -p "$(echo -e "\033[1;37m$(L MENU_SELECT) [0-3]:\033[0m ")" choice
+        
+        case "$choice" in
+            1) up_command; read -p "$(L PRESS_ENTER)" ;;
+            2) down_command; read -p "$(L PRESS_ENTER)" ;;
+            3) restart_command; read -p "$(L PRESS_ENTER)" ;;
+            0) return 0 ;;
+            *)
+                echo -e "\033[1;31m$(L INVALID_OPTION)\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Installation submenu
+installation_menu() {
+    while true; do
+        clear
+        echo -e "\033[1;37m🛠️  $(L INST_TITLE)\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 40))\033[0m"
+        echo
+        
+        # Show installation status
+        if is_remnawave_installed; then
+            echo -e "   \033[38;5;15mStatus:\033[0m \033[1;32m✅ Installed\033[0m"
+        else
+            echo -e "   \033[38;5;15mStatus:\033[0m \033[1;33m⚠️  Not installed\033[0m"
+        fi
+        echo
+        
+        echo -e "   \033[38;5;15m1)\033[0m 🛠️  $(L INST_INSTALL)"
+        echo -e "   \033[38;5;15m2)\033[0m ⬆️  $(L INST_UPDATE)"
+        echo -e "   \033[38;5;15m3)\033[0m 🗑️  $(L INST_UNINSTALL)"
+        echo
+        echo -e "   \033[38;5;244m0)\033[0m ⬅️  $(L SUB_BACK)"
+        echo
+        
+        read -p "$(echo -e "\033[1;37m$(L MENU_SELECT) [0-3]:\033[0m ")" choice
+        
+        case "$choice" in
+            1) install_command; read -p "$(L PRESS_ENTER)" ;;
+            2) update_command; read -p "$(L PRESS_ENTER)" ;;
+            3) uninstall_command; read -p "$(L PRESS_ENTER)" ;;
+            0) return 0 ;;
+            *)
+                echo -e "\033[1;31m$(L INVALID_OPTION)\033[0m"
                 sleep 1
                 ;;
         esac
