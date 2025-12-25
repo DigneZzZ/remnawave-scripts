@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.4
+# VERSION=5.3.5
 
-SCRIPT_VERSION="5.3.4"
+SCRIPT_VERSION="5.3.5"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -4736,6 +4736,28 @@ restore_full_from_archive() {
     
     log_restore_operation "Archive Validation" "SUCCESS" "Archive validated successfully"
     
+    # КРИТИЧЕСКИ ВАЖНО: Копируем backup file в безопасное место ПЕРЕД удалением target_dir
+    # Проблема: если backup_file находится внутри target_dir (например /opt/remnawave/backups/),
+    # он будет удален вместе с target_dir
+    local safe_backup_file="$backup_file"
+    local temp_backup_copy=""
+    
+    if [[ "$backup_file" == "$target_dir"* ]]; then
+        echo -e "\033[38;5;244m   Backup is inside target directory, creating temporary copy...\033[0m"
+        temp_backup_copy="/tmp/restore_backup_$(date +%s)_$(basename "$backup_file")"
+        
+        if cp "$backup_file" "$temp_backup_copy"; then
+            safe_backup_file="$temp_backup_copy"
+            backup_file="$temp_backup_copy"  # Обновляем переменную для использования далее
+            echo -e "\033[38;5;244m   ✅ Temporary copy created: $temp_backup_copy\033[0m"
+            log_restore_operation "Backup Safety" "SUCCESS" "Created temporary backup copy"
+        else
+            echo -e "\033[1;31m❌ Failed to create temporary backup copy!\033[0m"
+            log_restore_operation "Backup Safety" "ERROR" "Failed to create temporary copy"
+            return 1
+        fi
+    fi
+    
     # Удаляем старую директорию если нужно
     if [ -d "$target_dir" ]; then
         rm -rf "$target_dir"
@@ -4968,6 +4990,14 @@ restore_full_from_archive() {
     if [ $integrity_result -eq 0 ]; then
         echo -e "\033[1;32m🎉 Full restore completed successfully!\033[0m"
         log_restore_operation "Full Restore" "SUCCESS" "Restore completed successfully with full integrity"
+        
+        # Очищаем временную копию бэкапа если создавалась
+        if [ -n "$temp_backup_copy" ] && [ -f "$temp_backup_copy" ]; then
+            echo -e "\033[38;5;244m   Cleaning up temporary backup copy...\033[0m"
+            rm -f "$temp_backup_copy"
+            log_restore_operation "Cleanup" "SUCCESS" "Temporary backup copy removed"
+        fi
+        
         # Очищаем safety backup при успешном восстановлении
         if [ -f "/tmp/safety_backup_location_$$" ]; then
             local safety_backup_dir=$(cat "/tmp/safety_backup_location_$$")
@@ -4980,10 +5010,22 @@ restore_full_from_archive() {
     elif [ $integrity_result -eq 1 ]; then
         echo -e "\033[1;33m⚠️  Restore completed with warnings - please check the application\033[0m"
         log_restore_operation "Full Restore" "WARNING" "Restore completed with integrity warnings"
+        
+        # Очищаем временную копию бэкапа и при частичном успехе
+        if [ -n "$temp_backup_copy" ] && [ -f "$temp_backup_copy" ]; then
+            rm -f "$temp_backup_copy"
+        fi
+        
         return 0
     else
         echo -e "\033[1;31m❌ Restore failed integrity check! Rolling back...\033[0m"
         log_restore_operation "Full Restore" "ERROR" "Restore failed integrity check, rolling back"
+        
+        # Очищаем временную копию бэкапа и при ошибке
+        if [ -n "$temp_backup_copy" ] && [ -f "$temp_backup_copy" ]; then
+            rm -f "$temp_backup_copy"
+        fi
+        
         rollback_from_safety_backup "$target_dir" "$target_app_name"
         return 1
     fi
@@ -7226,7 +7268,7 @@ offer_caddy_installation() {
     colorized_echo cyan "🌐 Reverse Proxy Setup"
     colorized_echo cyan "==================================================="
     echo
-    colorized_echo white "Would you like to install Caddy as a reverse proxy?"
+    colorized_echo white "Installing Caddy as a reverse proxy..."
     colorized_echo gray "Caddy will automatically obtain SSL certificates for your domains."
     echo
     colorized_echo white "📋 Domains that will be used (from installation):"
@@ -7249,33 +7291,28 @@ offer_caddy_installation() {
         echo
     fi
     
-    read -p "Install Caddy reverse proxy? (y/n): " -r install_caddy
-    
-    if [[ $install_caddy =~ ^[Yy]$ ]]; then
-        echo
-        
-        # Check firewall ports first
-        colorized_echo white "🔥 Checking firewall configuration..."
-        echo
-        if ! check_firewall_ports; then
-            read -p "Continue anyway? Caddy may fail to obtain certificates (y/n): " -r continue_firewall
-            if [[ ! $continue_firewall =~ ^[Yy]$ ]]; then
-                colorized_echo gray "Caddy installation cancelled. Please open firewall ports first."
-                return 0
-            fi
-            echo
-        else
-            colorized_echo green "✅ Firewall check passed (or no firewall detected)"
-            echo
+    # Check firewall ports first
+    colorized_echo white "🔥 Checking firewall configuration..."
+    echo
+    if ! check_firewall_ports; then
+        read -p "Continue anyway? Caddy may fail to obtain certificates (y/n): " -r continue_firewall
+        if [[ ! $continue_firewall =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled. Please open firewall ports first."
+            return 0
         fi
-        
-        colorized_echo white "🔍 Verifying DNS configuration for your domains..."
         echo
-        
-        # Validate panel domain DNS
-        local panel_dns_ok=true
-        if ! validate_domain_dns "$panel_domain"; then
-            panel_dns_ok=false
+    else
+        colorized_echo green "✅ Firewall check passed (or no firewall detected)"
+        echo
+    fi
+    
+    colorized_echo white "🔍 Verifying DNS configuration for your domains..."
+    echo
+    
+    # Validate panel domain DNS
+    local panel_dns_ok=true
+    if ! validate_domain_dns "$panel_domain"; then
+        panel_dns_ok=false
         fi
         
         # Validate subscription domain DNS (if different)
@@ -7332,19 +7369,6 @@ offer_caddy_installation() {
         fi
         
         install_caddy_reverse_proxy "$panel_domain" "$sub_domain" "$panel_port" "$sub_port" "$sub_prefix" "$secure_mode"
-    else
-        colorized_echo gray "Skipping Caddy installation."
-        echo
-        colorized_echo cyan "==================================================="
-        colorized_echo cyan "🌐 Manual Reverse Proxy Setup"
-        colorized_echo cyan "==================================================="
-        colorized_echo yellow "To access the panel from the internet, you need to"
-        colorized_echo yellow "configure a reverse proxy (Nginx, Caddy, etc.)."
-        echo
-        colorized_echo blue "📖 Documentation:"
-        echo -e "   \033[1;37mhttps://docs.rw/docs/install/reverse-proxies/\033[0m"
-        colorized_echo cyan "==================================================="
-    fi
 }
 
 # ===== CADDY MANAGEMENT COMMANDS =====
@@ -9452,11 +9476,19 @@ monitor_command() {
 }
 
 is_remnawave_installed() {
-    if [ -d "$APP_DIR" ]; then
-        return 0
-    else
+    # Check if directory exists
+    if [ ! -d "$APP_DIR" ]; then
         return 1
     fi
+    
+    # Directory exists - check if it's actually installed (not just an empty folder)
+    # A real installation must have at least docker-compose.yml or .env file
+    if [ -f "$APP_DIR/docker-compose.yml" ] || [ -f "$APP_DIR/.env" ]; then
+        return 0
+    fi
+    
+    # Directory exists but no config files - not considered installed
+    return 1
 }
 
 is_remnawave_up() {
@@ -9611,12 +9643,9 @@ install_command() {
             
             local admin_token=$(get_admin_token "$admin_username" "$admin_password")
             
-            if [ -n "$admin_token" ]; then
-                colorized_echo green "✅ Admin account created successfully!"
-                
-                # Save credentials to file
-                local credentials_file="$APP_DIR/admin-credentials.txt"
-                cat > "$credentials_file" << EOF
+            # Save credentials to file ALWAYS (even if token creation fails)
+            local credentials_file="$APP_DIR/admin-credentials.txt"
+            cat > "$credentials_file" << EOF
 ========================================
   REMNAWAVE ADMIN CREDENTIALS
 ========================================
@@ -9635,7 +9664,10 @@ install_command() {
 ----------------------------------------
 ========================================
 EOF
-                chmod 600 "$credentials_file"
+            chmod 600 "$credentials_file"
+            
+            if [ -n "$admin_token" ]; then
+                colorized_echo green "✅ Admin account created successfully!"
                 colorized_echo green "✅ Credentials saved to: $credentials_file"
                 
                 # Create subscription-page API token
