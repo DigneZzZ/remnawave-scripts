@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.1
+# VERSION=5.3.2
 
-SCRIPT_VERSION="5.3.1"
+SCRIPT_VERSION="5.3.2"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9502,6 +9502,29 @@ install_command() {
             exit 1
         fi
         is_override=true
+        
+        # Ask to stop running containers to avoid port conflicts
+        if is_remnawave_up; then
+            echo
+            colorized_echo yellow "⚠️  Services are currently running."
+            colorized_echo yellow "To avoid port conflicts during reinstallation, we need to stop them."
+            echo
+            read -r -p "Stop all running containers now? (y/n) "
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                colorized_echo blue "🛑 Stopping all services..."
+                detect_compose
+                cd "$APP_DIR" 2>/dev/null || true
+                $COMPOSE down 2>/dev/null || true
+                colorized_echo green "✅ Services stopped successfully"
+                echo
+                sleep 2
+            else
+                colorized_echo yellow "⚠️  Warning: Port conflicts may occur during installation."
+                colorized_echo yellow "If installation fails, please run '$APP_NAME down' and try again."
+                echo
+                sleep 3
+            fi
+        fi
     fi
     detect_os
     if ! command -v curl >/dev/null 2>&1; then
@@ -9759,7 +9782,7 @@ uninstall_command() {
     colorized_echo white "📁 Location: $final_archive"
     echo
     colorized_echo yellow "💡 This backup can be used to restore later with:"
-    colorized_echo yellow "   remnawave restore --file $final_archive"
+    colorized_echo yellow "   $APP_NAME restore --file $final_archive"
     echo
 
     detect_compose
@@ -10953,7 +10976,7 @@ console_command() {
      detect_compose
  
         if ! is_remnawave_up; then
-            colorized_echo red "Remnawave is not running. Start it first with 'remnawave up'"
+            colorized_echo red "Remnawave is not running. Start it first with '$APP_NAME up'"
             exit 1
         fi
 
@@ -10969,7 +10992,7 @@ pm2_monitor() {
      detect_compose
  
         if ! is_remnawave_up; then
-            colorized_echo red "Remnawave is not running. Start it first with 'remnawave up'"
+            colorized_echo red "Remnawave is not running. Start it first with '$APP_NAME up'"
             exit 1
         fi
 
@@ -11275,7 +11298,7 @@ usage() {
     echo
 
     echo -e "\033[38;5;8m💡 Flexible restore paths:\033[0m"
-    echo -e "\033[38;5;244m   remnawave restore --path /root --name newpanel\033[0m"
+    echo -e "\033[38;5;244m   $APP_NAME restore --path /root --name newpanel\033[0m"
     echo -e "\033[38;5;244m   # Installs to /root/newpanel/\033[0m"
 
     if is_remnawave_installed && [ -f "$ENV_FILE" ]; then
