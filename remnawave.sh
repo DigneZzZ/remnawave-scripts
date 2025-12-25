@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.5
+# VERSION=5.3.6
 
-SCRIPT_VERSION="5.3.5"
+SCRIPT_VERSION="5.3.6"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -11058,6 +11058,15 @@ main_menu() {
         if is_remnawave_installed; then
             if is_remnawave_up; then
                 echo -e "\033[1;32m✅ $(L PANEL_RUNNING)\033[0m"
+                
+                # Show Caddy status if installed
+                if is_caddy_installed; then
+                    if is_caddy_up; then
+                        echo -e "\033[1;32m✅ Caddy: Running\033[0m"
+                    else
+                        echo -e "\033[1;31m❌ Caddy: Stopped\033[0m"
+                    fi
+                fi
                 
                 if [ -f "$ENV_FILE" ]; then
                     local panel_domain=$(grep "^FRONT_END_DOMAIN=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'" | awk '{print $1}')
