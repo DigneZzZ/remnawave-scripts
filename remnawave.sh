@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.6
+# VERSION=5.3.7
 
-SCRIPT_VERSION="5.3.6"
+SCRIPT_VERSION="5.3.7"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -11036,12 +11036,16 @@ main_menu() {
     local remote_script_version=$(curl -s --connect-timeout 3 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | head -1 | cut -d'"' -f2)
     if [ -n "$remote_script_version" ] && [ "$remote_script_version" != "$SCRIPT_VERSION" ]; then
         echo
-        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
-        echo -e "\033[48;5;220m\033[38;5;16m  📦 New script version available: v$remote_script_version (current: v$SCRIPT_VERSION)  \033[0m"
-        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
-        echo -e "\033[1;33m  Update command: $APP_NAME update-script\033[0m"
+        echo -e "\033[1;33m📦 New version available: v$remote_script_version (current: v$SCRIPT_VERSION)\033[0m"
+        read -r -p "Update now? (y/n) " update_choice
+        if [[ "$update_choice" =~ ^[Yy]$ ]]; then
+            colorized_echo blue "Updating script..."
+            curl -sSL $SCRIPT_URL | install -m 755 /dev/stdin /usr/local/bin/$APP_NAME
+            colorized_echo green "✅ Script updated successfully! Restarting..."
+            sleep 1
+            exec "$APP_NAME" "$@"
+        fi
         echo
-        read -p "Press Enter to continue..."
     fi
     
     while true; do
@@ -11648,6 +11652,7 @@ case "$COMMAND" in
     schedule) schedule_command "$@" ;;
     install-script) install_remnawave_script ;;
     uninstall-script) uninstall_remnawave_script ;;
+    update-script) update_remnawave_script ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
     edit-env-sub) edit_env_sub_command ;;
