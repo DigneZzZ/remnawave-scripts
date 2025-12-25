@@ -468,17 +468,8 @@ check_deprecated_env_variables() {
 
 # ===== END ENV MIGRATION FUNCTIONS =====
 
-# Check for script updates from GitHub (similar to remnanode.sh update logic)
+# Check for script updates from GitHub (no caching - check every time)
 check_script_update() {
-    # Skip if already checked recently (cache for 24 hours)
-    local cache_file="$APP_DIR/.version_check_cache"
-    if [ -f "$cache_file" ]; then
-        local cache_age=$(( $(date +%s) - $(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0) ))
-        if [ "$cache_age" -lt 86400 ]; then
-            return 0
-        fi
-    fi
-    
     # Try to fetch latest version from GitHub (with timeout, silent)
     local remote_version=$(curl -s --max-time 3 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | head -1 | cut -d'"' -f2)
     
@@ -487,17 +478,13 @@ check_script_update() {
         return 0
     fi
     
-    # Update cache
-    mkdir -p "$APP_DIR" 2>/dev/null || true
-    touch "$cache_file" 2>/dev/null || true
-    
     # Compare versions
     if [ "$remote_version" != "$SCRIPT_VERSION" ]; then
         echo
         echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
         echo -e "\033[48;5;220m\033[38;5;16m  📦 New script version available: v$remote_version (current: v$SCRIPT_VERSION)  \033[0m"
         echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
-        echo -e "\033[1;33m  Update command: sudo $APP_NAME update-script\033[0m"
+        echo -e "\033[1;33m  Update command: $APP_NAME update-script\033[0m"
         echo
     fi
     
