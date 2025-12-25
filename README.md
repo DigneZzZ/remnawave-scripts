@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-5.3.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-5.4.1-blue.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
@@ -110,6 +110,15 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 * Auto-generated admin credentials for Secure mode (stored in `.env`)
 * Installed to `/opt/caddy-remnawave/` as Docker container
 * **Localized Caddy menu** (EN/RU) (v5.3.0+)
+* **Improved assets handling** for subscription page (v5.4.1+)
+* Support for both single-domain and multi-domain configurations
+
+**🎉 Enhanced Installation Experience (v5.4.1+)**
+* **Beautiful final credentials summary** after installation
+* All access URLs, credentials, and useful commands in one screen
+* Automatic display of Remnawave Panel and Caddy Security credentials
+* Saved credentials locations clearly highlighted
+* Professional box-drawing design with color-coded information
 
 **🌐 Bilingual Interface (v5.3.0+)**
 * Menu language switcher: press `L` in main menu
