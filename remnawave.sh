@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.3
+# VERSION=5.3.4
 
-SCRIPT_VERSION="5.3.3"
+SCRIPT_VERSION="5.3.4"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -467,29 +467,6 @@ check_deprecated_env_variables() {
 }
 
 # ===== END ENV MIGRATION FUNCTIONS =====
-
-# Check for script updates from GitHub (no caching - check every time)
-check_script_update() {
-    # Try to fetch latest version from GitHub (with timeout, silent)
-    local remote_version=$(curl -s --max-time 3 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | head -1 | cut -d'"' -f2)
-    
-    # If fetch failed, skip silently
-    if [ -z "$remote_version" ]; then
-        return 0
-    fi
-    
-    # Compare versions
-    if [ "$remote_version" != "$SCRIPT_VERSION" ]; then
-        echo
-        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
-        echo -e "\033[48;5;220m\033[38;5;16m  📦 New script version available: v$remote_version (current: v$SCRIPT_VERSION)  \033[0m"
-        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
-        echo -e "\033[1;33m  Update command: $APP_NAME update-script\033[0m"
-        echo
-    fi
-    
-    return 0
-}
 
 check_backup_script_version() {
     if [ ! -f "$BACKUP_SCRIPT_FILE" ]; then
@@ -11023,8 +11000,17 @@ pm2_monitor() {
 }
 
 main_menu() {
-    # Check for script updates once per session
-    check_script_update
+    # Check for script updates on first menu display
+    local remote_script_version=$(curl -s --connect-timeout 3 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | head -1 | cut -d'"' -f2)
+    if [ -n "$remote_script_version" ] && [ "$remote_script_version" != "$SCRIPT_VERSION" ]; then
+        echo
+        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
+        echo -e "\033[48;5;220m\033[38;5;16m  📦 New script version available: v$remote_script_version (current: v$SCRIPT_VERSION)  \033[0m"
+        echo -e "\033[48;5;220m\033[38;5;16m                                                              \033[0m"
+        echo -e "\033[1;33m  Update command: $APP_NAME update-script\033[0m"
+        echo
+        read -p "Press Enter to continue..."
+    fi
     
     while true; do
         clear
