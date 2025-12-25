@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.3.8
+# VERSION=5.3.9
 
-SCRIPT_VERSION="5.3.8"
+SCRIPT_VERSION="5.3.9"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9706,10 +9706,14 @@ EOF
                     
                     # Recreate subscription-page container to apply token
                     colorized_echo blue "Starting subscription-page with API token..."
-                if $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page; then
-                    colorized_echo green "✅ Subscription-page started with API token!"
+                    if $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page; then
+                        colorized_echo green "✅ Subscription-page started with API token!"
+                    else
+                        colorized_echo yellow "⚠️  Subscription-page start had issues. Check with: $APP_NAME status"
+                    fi
                 else
-                    colorized_echo yellow "⚠️  Subscription-page start had issues. Check with: $APP_NAME status"
+                    colorized_echo yellow "⚠️  Could not create API token automatically."
+                    colorized_echo yellow "You can configure it later: $APP_NAME subpage"
                 fi
                 
                 # Display credentials summary
