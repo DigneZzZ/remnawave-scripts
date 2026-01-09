@@ -9271,7 +9271,7 @@ backup_command() {
         # Получаем версию панели
         local panel_version=$(get_panel_version)
         
-        cat > "$backup_dir/metadata.json" << EOF
+        cat > "$backup_dir/backup-metadata.json" << EOF
 {
     "backup_type": "full",
     "timestamp": "$timestamp",
