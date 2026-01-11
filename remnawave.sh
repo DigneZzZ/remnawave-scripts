@@ -15,7 +15,7 @@ if [ $# -gt 0 ]; then
     shift
 fi
 
-
+SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnawave.sh"  # Update with actual URL
 
 while [[ $# -gt 0 ]]; do  
     key="$1"  
@@ -38,7 +38,21 @@ while [[ $# -gt 0 ]]; do
                 exit 1  
             fi  
             shift # past argument  
-        ;;  
+        ;;
+        --source)
+            if [[ "$COMMAND" == "install-script" ]]; then
+                if [[ -n "$2" && "$2" =~ remnawave\.sh$ ]]; then
+                    SCRIPT_URL="$2"
+                    shift 2
+                else
+                    echo "Error: --source parameter must be a URL to a remnawave.sh file."
+                    exit 1
+                fi
+            else
+                echo "Error: --source parameter is only allowed with 'install-script' command."
+                exit 1
+            fi
+        ;;
         --compress|-c|--data-only|--include-configs|-h|--help)
             # Аргументы команды backup - не обрабатываем здесь, пропускаем
             break
@@ -72,7 +86,6 @@ INSTALL_DIR="/opt"
 APP_DIR="$INSTALL_DIR/$APP_NAME"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 ENV_FILE="$APP_DIR/.env"
-SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnawave.sh"  # Update with actual URL
 SUB_ENV_FILE="$APP_DIR/.env.subscription"
 BACKUP_CONFIG_FILE="$APP_DIR/backup-config.json"
 BACKUP_SCRIPT_FILE="$APP_DIR/backup-scheduler.sh"
@@ -724,15 +737,16 @@ install_docker() {
 install_remnawave_script() {  
     colorized_echo blue "Installing remnawave script"  
     TARGET_PATH="/usr/local/bin/$APP_NAME"  
-      
+
     if [ ! -d "/usr/local/bin" ]; then  
         mkdir -p /usr/local/bin  
     fi  
-      
-    curl -sSL $SCRIPT_URL -o $TARGET_PATH  
-  
+
+    curl -sSL $SCRIPT_URL -o $TARGET_PATH
+    colorized_echo blue "Fetched remnawave script from $SCRIPT_URL"
+
     chmod 755 $TARGET_PATH  
-      
+
     if [ -f "$TARGET_PATH" ]; then  
         colorized_echo green "Remnawave script installed successfully at $TARGET_PATH"  
     else  

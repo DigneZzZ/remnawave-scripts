@@ -7,23 +7,41 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.6.0
+# VERSION=2.6.1
+
+SCRIPT_VERSION="2.6.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
-    shift  
+    shift
 fi
 
 # Debug mode - set via --debug flag
 DEBUG_MODE=false
+SCRIPT_URL="https://raw.githubusercontent.com/dignezzz/remnawave-scripts/main/selfsteal.sh"
+UPDATE_URL="$SCRIPT_URL"
 
-# Check for --debug flag early
-for arg in "$@"; do
-    if [ "$arg" = "--debug" ]; then
-        DEBUG_MODE=true
-        echo "🔧 DEBUG MODE ENABLED"
-        break
-    fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --debug)
+            DEBUG_MODE=true
+            echo "🔧 DEBUG MODE ENABLED"
+            shift
+        ;;
+        --source)
+           if [[ -n "$2" && "$2" =~ selfsteal\.sh$ ]]; then
+               SCRIPT_URL="$2"
+               shift 2
+           else
+               echo "Error: --source parameter must be a URL to a remnawave.sh file."
+               exit 1
+           fi
+        ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+        ;;
+    esac
 done
 
 # Only enable strict mode if not debugging
@@ -34,12 +52,6 @@ if [ "$DEBUG_MODE" = true ]; then
 else
     set -euo pipefail
 fi
-
-# Script Configuration
-SCRIPT_VERSION="2.6.0"
-GITHUB_REPO="dignezzz/remnawave-scripts"
-UPDATE_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/selfsteal.sh"
-SCRIPT_URL="$UPDATE_URL"
 
 # ACME Configuration
 # Ensure HOME is set correctly (important for sudo)

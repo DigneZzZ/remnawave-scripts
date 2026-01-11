@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.6.0
+# Version: 3.6.2
 set -e
-SCRIPT_VERSION="3.6.1"
+SCRIPT_VERSION="3.6.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -14,6 +14,8 @@ if [ $# -gt 0 ]; then
     COMMAND="$1"
     shift
 fi
+
+SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnanode.sh"
 
 while [[ $# -gt 0 ]]; do
     key="$1"
@@ -37,6 +39,20 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift # past argument
+        ;;
+        --source)
+            if [[ "$COMMAND" == "install-script" ]]; then
+                if [[ -n "$2" && "$2" =~ remnanode\.sh$ ]]; then
+                    SCRIPT_URL="$2"
+                    shift 2
+                else
+                    echo "Error: --source parameter must be a URL to a remnanode.sh file."
+                    exit 1
+                fi
+            else
+                echo "Error: --source parameter is only allowed with 'install-script' command."
+                exit 1
+            fi
         ;;
         --help|-h)
             show_command_help "$COMMAND"
@@ -74,7 +90,6 @@ ENV_FILE="$APP_DIR/.env"
 XRAY_FILE="$DATA_DIR/xray"
 GEOIP_FILE="$DATA_DIR/geoip.dat"
 GEOSITE_FILE="$DATA_DIR/geosite.dat"
-SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnanode.sh"
 
 # Color definitions
 RED='\033[0;31m'
@@ -245,9 +260,12 @@ install_docker() {
 install_remnanode_script() {
     colorized_echo blue "Installing remnanode script v$SCRIPT_VERSION"
     TARGET_PATH="/usr/local/bin/$APP_NAME"
+
     curl -sSL $SCRIPT_URL -o $TARGET_PATH
+    colorized_echo blue "Fetched remnawave script from $SCRIPT_URL"
+
     chmod 755 $TARGET_PATH
-    
+
     # Получаем версию установленного скрипта
     local installed_version=$(grep "^SCRIPT_VERSION=" "$TARGET_PATH" 2>/dev/null | head -1 | cut -d'"' -f2)
     if [ -n "$installed_version" ]; then
