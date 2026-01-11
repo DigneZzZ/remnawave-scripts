@@ -33,13 +33,12 @@ while [[ $# -gt 0 ]]; do
                SCRIPT_URL="$2"
                shift 2
            else
-               echo "Error: --source parameter must be a URL to a remnawave.sh file."
+               echo "Error: --source parameter must be a URL to a selfsteal.sh file."
                exit 1
            fi
         ;;
         *)
-            echo "Unknown argument: $1"
-            exit 1
+            break
         ;;
     esac
 done
