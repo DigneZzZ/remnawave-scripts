@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.4.5
+# VERSION=5.6.0
 
-SCRIPT_VERSION="5.4.5"
-BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
+SCRIPT_VERSION="5.6.0"
+BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
     shift  
@@ -818,6 +818,7 @@ validate_and_fix_backup_config() {
     "days": 7,
     "min_backups": 3
   },
+  "include_reverse_proxy": true,
   "telegram": {
     "enabled": $telegram_enabled,
     "bot_token": $bot_token_value,
@@ -875,6 +876,7 @@ ensure_backup_dirs() {
     "days": 7,
     "min_backups": 3
   },
+  "include_reverse_proxy": true,
   "telegram": {
     "enabled": false,
     "bot_token": null,
@@ -1181,6 +1183,7 @@ schedule_setup_menu() {
             local compression=$(jq -r '.compression.enabled // false' "$BACKUP_CONFIG_FILE" 2>/dev/null)
             local retention=$(jq -r '.retention.days // 7' "$BACKUP_CONFIG_FILE" 2>/dev/null)
             local telegram_enabled=$(jq -r '.telegram.enabled // false' "$BACKUP_CONFIG_FILE" 2>/dev/null)
+            local include_reverse_proxy=$(jq -r '.include_reverse_proxy // true' "$BACKUP_CONFIG_FILE" 2>/dev/null)
             
             # Красивое отображение типа бэкапа
             local backup_type_display=""
@@ -1195,6 +1198,7 @@ schedule_setup_menu() {
             printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Schedule:" "$schedule"
             printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Compression:" "$([ "$compression" = "true" ] && echo "Enabled" || echo "Disabled")"
             printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s days\033[0m\n" "Retention:" "$retention"
+            printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Reverse Proxy:" "$([ "$include_reverse_proxy" = "true" ] && echo "Auto-detect" || echo "Disabled")"
             printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Telegram:" "$([ "$telegram_enabled" = "true" ] && echo "Enabled (49MB limit)" || echo "Disabled")"
             echo
         fi
@@ -1204,22 +1208,24 @@ schedule_setup_menu() {
         echo -e "   \033[38;5;15m2)\033[0m ⏰ Set backup schedule"
         echo -e "   \033[38;5;15m3)\033[0m 🗜️  Configure compression"
         echo -e "   \033[38;5;15m4)\033[0m 🗂️  Set retention policy"
-        echo -e "   \033[38;5;15m5)\033[0m 📱 Configure Telegram"
-        echo -e "   \033[38;5;15m6)\033[0m 🔄 Reset to defaults"
-        echo -e "   \033[38;5;15m7)\033[0m 🔧 Recreate backup script"
+        echo -e "   \033[38;5;15m5)\033[0m 🌐 Configure reverse proxy backup (Caddy/Traefik)"
+        echo -e "   \033[38;5;15m6)\033[0m 📱 Configure Telegram"
+        echo -e "   \033[38;5;15m7)\033[0m 🔄 Reset to defaults"
+        echo -e "   \033[38;5;15m8)\033[0m 🔧 Recreate backup script"
         echo -e "   \033[38;5;244m0)\033[0m ⬅️  Back"
         echo
         
-        read -p "Select option [0-7]: " choice
+        read -p "Select option [0-8]: " choice
         
         case "$choice" in
             1) schedule_configure_backup_type ;;
             2) schedule_configure_schedule ;;
             3) schedule_configure_compression ;;
             4) schedule_configure_retention ;;
-            5) schedule_configure_telegram ;;
-            6) schedule_reset_config ;;
-            7) schedule_recreate_script ;;
+            5) schedule_configure_reverse_proxy ;;
+            6) schedule_configure_telegram ;;
+            7) schedule_reset_config ;;
+            8) schedule_recreate_script ;;
             0) 
                 return 0  
                 ;;
@@ -1447,6 +1453,89 @@ schedule_configure_retention() {
     fi
     
     echo -e "\033[1;32m✅ Retention policy updated: $retention_days days\033[0m"
+    sleep 2
+}
+
+schedule_configure_reverse_proxy() {
+    clear
+    echo -e "\033[1;37m🌐 Configure Reverse Proxy Backup\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
+    echo
+    
+    # Текущая настройка
+    local include_reverse_proxy=$(jq -r '.include_reverse_proxy // true' "$BACKUP_CONFIG_FILE" 2>/dev/null)
+    
+    echo -e "\033[1;37m📋 Current Setting:\033[0m"
+    printf "   \033[38;5;15m%-20s\033[0m \033[38;5;250m%s\033[0m\n" "Reverse Proxy:" "$([ "$include_reverse_proxy" = "true" ] && echo "Enabled (auto-detect)" || echo "Disabled")"
+    echo
+    
+    # Проверяем установленные прокси
+    echo -e "\033[1;37m🔍 Detected Installations:\033[0m"
+    
+    local caddy_installed=false
+    local traefik_installed=false
+    local detected_proxies=""
+    
+    if [ -d "/opt/caddy-remnawave" ]; then
+        caddy_installed=true
+        echo -e "   \033[1;32m✓\033[0m Caddy found at \033[38;5;244m/opt/caddy-remnawave\033[0m"
+        detected_proxies="Caddy"
+    else
+        echo -e "   \033[38;5;244m✗ Caddy not installed\033[0m"
+    fi
+    
+    for traefik_dir in "/opt/traefik" "/opt/traefik-remnawave" "/etc/traefik"; do
+        if [ -d "$traefik_dir" ]; then
+            traefik_installed=true
+            echo -e "   \033[1;32m✓\033[0m Traefik found at \033[38;5;244m$traefik_dir\033[0m"
+            [ -n "$detected_proxies" ] && detected_proxies="$detected_proxies + Traefik" || detected_proxies="Traefik"
+            break
+        fi
+    done
+    
+    if [ "$traefik_installed" = false ]; then
+        echo -e "   \033[38;5;244m✗ Traefik not installed\033[0m"
+    fi
+    
+    echo
+    if [ -n "$detected_proxies" ]; then
+        if [ "$include_reverse_proxy" = "true" ]; then
+            echo -e "\033[38;5;244m💡 Will backup: $detected_proxies\033[0m"
+        else
+            echo -e "\033[38;5;244m💡 Backup disabled, would backup: $detected_proxies\033[0m"
+        fi
+    else
+        echo -e "\033[38;5;244m💡 No reverse proxy detected. Nothing to backup.\033[0m"
+    fi
+    
+    echo
+    echo -e "\033[1;37m⚙️  Configuration Options:\033[0m"
+    echo -e "   \033[38;5;15m1)\033[0m $([ "$include_reverse_proxy" = "true" ] && echo "Disable" || echo "Enable") reverse proxy backup"
+    echo -e "   \033[38;5;244m0)\033[0m Back"
+    echo
+    
+    read -p "Select option [0-1]: " choice
+    
+    case "$choice" in
+        1)
+            if [ "$include_reverse_proxy" = "true" ]; then
+                schedule_update_config ".include_reverse_proxy" "false"
+                echo -e "\033[1;32m✅ Reverse proxy backup disabled\033[0m"
+            else
+                schedule_update_config ".include_reverse_proxy" "true"
+                echo -e "\033[1;32m✅ Reverse proxy backup enabled (auto-detect)\033[0m"
+            fi
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "\033[1;31mInvalid option!\033[0m"
+            ;;
+    esac
+    
+    echo
+    echo -e "\033[38;5;244m💡 Note: Run 'Recreate backup script' for changes to take effect\033[0m"
     sleep 2
 }
 
@@ -2614,7 +2703,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.1.7"
+BACKUP_SCRIPT_VERSION="1.3.0"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -2688,6 +2777,52 @@ check_container_running() {
 check_command docker
 check_command jq
 
+# ===== ПАРСИНГ АРГУМЕНТОВ КОМАНДНОЙ СТРОКИ =====
+# Позволяет переопределять настройки из конфига при ручном запуске
+
+CLI_DATA_ONLY=false
+CLI_NO_COMPRESS=false
+CLI_NO_REVERSE_PROXY=false
+CLI_QUIET=false
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --data-only)
+            CLI_DATA_ONLY=true
+            ;;
+        --no-compress)
+            CLI_NO_COMPRESS=true
+            ;;
+        --no-reverse-proxy)
+            CLI_NO_REVERSE_PROXY=true
+            ;;
+        --quiet|-q)
+            CLI_QUIET=true
+            ;;
+        --help|-h)
+            echo "Remnawave Backup Script v$BACKUP_SCRIPT_VERSION"
+            echo ""
+            echo "Usage: $0 [options]"
+            echo ""
+            echo "Options:"
+            echo "  --data-only         Backup database only (skip configs)"
+            echo "  --no-compress       Create uncompressed backup"
+            echo "  --no-reverse-proxy  Skip Caddy/Traefik backup"
+            echo "  --quiet, -q         Minimal output (for cron)"
+            echo "  --help, -h          Show this help"
+            echo ""
+            echo "Without arguments, uses settings from backup-config.json"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 # Определяем переменные из конфигурации
 if [ ! -f "$CONFIG_FILE" ]; then
     log_message "ERROR: Backup configuration not found: $CONFIG_FILE"
@@ -2708,6 +2843,24 @@ TEMP_BACKUP_ROOT="/tmp/${APP_NAME}_backup"
 BACKUP_TYPE=$(jq -r '.backup_type // "sql_dump"' "$CONFIG_FILE")
 COMPRESS_ENABLED=$(jq -r '.compression.enabled // true' "$CONFIG_FILE")
 TELEGRAM_ENABLED=$(jq -r '.telegram.enabled // false' "$CONFIG_FILE")
+INCLUDE_REVERSE_PROXY=$(jq -r '.include_reverse_proxy // true' "$CONFIG_FILE")
+INCLUDE_CONFIGS=true
+
+# ===== ПРИМЕНЯЕМ CLI АРГУМЕНТЫ (OVERRIDE КОНФИГА) =====
+if [ "$CLI_DATA_ONLY" = true ]; then
+    INCLUDE_CONFIGS=false
+    log_message "CLI override: --data-only (database only, no configs)"
+fi
+
+if [ "$CLI_NO_COMPRESS" = true ]; then
+    COMPRESS_ENABLED=false
+    log_message "CLI override: --no-compress"
+fi
+
+if [ "$CLI_NO_REVERSE_PROXY" = true ]; then
+    INCLUDE_REVERSE_PROXY=false
+    log_message "CLI override: --no-reverse-proxy"
+fi
 
 # Создаем директории для бэкапов
 mkdir -p "$BACKUP_DIR"
@@ -2866,87 +3019,94 @@ case "$BACKUP_TYPE" in
         ;;
 esac
 
-# Шаг 2: Копирование конфигурационных файлов прямо в корень
-log_message "Step 2: Creating application configuration backup..."
+# Шаг 2: Копирование конфигурационных файлов (если не --data-only)
+if [ "$INCLUDE_CONFIGS" = true ]; then
+    log_message "Step 2: Creating application configuration backup..."
 
-# Копируем всю структуру кроме некоторых директорий
-log_message "Copying application configuration files..."
+    # Копируем всю структуру кроме некоторых директорий
+    log_message "Copying application configuration files..."
 
-if command -v rsync >/dev/null 2>&1; then
-    # rsync доступен, используем его с правильными исключениями
-    rsync -av \
-        --exclude='backups/' \
-        --exclude='logs/' \
-        --exclude='temp/' \
-        --exclude='*.log' \
-        --exclude='*.tmp' \
-        --exclude='.git/' \
-        "$APP_DIR/" \
-        "$temp_backup_dir/" 2>/dev/null
-    copy_result=$?
-else
-    # Используем улучшенный cp метод без рекурсии
-    log_message "rsync not available, using selective copy method"
-    copy_result=0
-    
-    # Копируем файлы по одному, исключая проблемные директории
-    find "$APP_DIR" -maxdepth 1 -type f \( \
-        -name "*.json" -o \
-        -name "*.yml" -o \
-        -name "*.yaml" -o \
-        -name "*.env*" -o \
-        -name "*.conf" -o \
-        -name "*.ini" -o \
-        -name "*.sh" -o \
-        -name "docker-compose*" \
-    \) -exec cp {} "$temp_backup_dir/" \; 2>/dev/null || true
-    
-    # Копируем важные директории если они существуют (исключая backups, logs, temp)
-    for dir in certs ssl certificates config configs custom scripts; do
-        if [ -d "$APP_DIR/$dir" ]; then
-            cp -r "$APP_DIR/$dir" "$temp_backup_dir/" 2>/dev/null || true
-        fi
-    done
-    
-    # Проверяем что хотя бы docker-compose.yml скопирован
-    if [ ! -f "$temp_backup_dir/docker-compose.yml" ]; then
-        copy_result=1
-        log_message "ERROR: Critical file docker-compose.yml not found or failed to copy"
-    fi
-fi
-
-if [ $copy_result -eq 0 ]; then
-    app_files_count=$(find "$temp_backup_dir" -type f | wc -l)
-    log_message "Application files copied successfully ($app_files_count files)"
-    
-    # Подменяем latest на конкретную версию в docker-compose.yml
-    if [ -f "$temp_backup_dir/docker-compose.yml" ]; then
-        # Получаем текущую версию панели
-        panel_version=$(docker exec "${APP_NAME}" awk -F'"' '/"version"/{print $4; exit}' package.json 2>/dev/null || echo "unknown")
+    if command -v rsync >/dev/null 2>&1; then
+        # rsync доступен, используем его с правильными исключениями
+        rsync -av \
+            --exclude='backups/' \
+            --exclude='logs/' \
+            --exclude='temp/' \
+            --exclude='*.log' \
+            --exclude='*.tmp' \
+            --exclude='.git/' \
+            "$APP_DIR/" \
+            "$temp_backup_dir/" 2>/dev/null
+        copy_result=$?
+    else
+        # Используем улучшенный cp метод без рекурсии
+        log_message "rsync not available, using selective copy method"
+        copy_result=0
         
-        if [ "$panel_version" != "unknown" ] && [ -n "$panel_version" ]; then
-            log_message "Pinning panel version to $panel_version in docker-compose.yml"
-            
-            # Создаем временный файл с подмененной версией
-            sed "s|image: remnawave/backend[:|$].*|image: remnawave/backend:$panel_version|g" \
-                "$temp_backup_dir/docker-compose.yml" > "$temp_backup_dir/docker-compose.yml.tmp"
-            
-            # Проверяем что подмена прошла успешно
-            if [ -f "$temp_backup_dir/docker-compose.yml.tmp" ]; then
-                mv "$temp_backup_dir/docker-compose.yml.tmp" "$temp_backup_dir/docker-compose.yml"
-                log_message "Version pinned successfully: remnawave/backend -> remnawave/backend:$panel_version"
-            else
-                log_message "WARNING: Failed to pin version, keeping original docker-compose.yml"
+        # Копируем файлы по одному, исключая проблемные директории
+        find "$APP_DIR" -maxdepth 1 -type f \( \
+            -name "*.json" -o \
+            -name "*.yml" -o \
+            -name "*.yaml" -o \
+            -name "*.env*" -o \
+            -name "*.conf" -o \
+            -name "*.ini" -o \
+            -name "*.sh" -o \
+            -name "docker-compose*" \
+        \) -exec cp {} "$temp_backup_dir/" \; 2>/dev/null || true
+        
+        # Копируем важные директории если они существуют (исключая backups, logs, temp)
+        for dir in certs ssl certificates config configs custom scripts; do
+            if [ -d "$APP_DIR/$dir" ]; then
+                cp -r "$APP_DIR/$dir" "$temp_backup_dir/" 2>/dev/null || true
             fi
-        else
-            log_message "WARNING: Could not determine panel version, docker-compose.yml will use 'latest' tag"
+        done
+        
+        # Проверяем что хотя бы docker-compose.yml скопирован
+        if [ ! -f "$temp_backup_dir/docker-compose.yml" ]; then
+            copy_result=1
+            log_message "ERROR: Critical file docker-compose.yml not found or failed to copy"
         fi
     fi
+
+    if [ $copy_result -eq 0 ]; then
+        app_files_count=$(find "$temp_backup_dir" -type f | wc -l)
+        log_message "Application files copied successfully ($app_files_count files)"
+        
+        # Подменяем latest на конкретную версию в docker-compose.yml
+        if [ -f "$temp_backup_dir/docker-compose.yml" ]; then
+            # Получаем текущую версию панели
+            panel_version=$(docker exec "${APP_NAME}" awk -F'"' '/"version"/{print $4; exit}' package.json 2>/dev/null || echo "unknown")
+            
+            if [ "$panel_version" != "unknown" ] && [ -n "$panel_version" ]; then
+                log_message "Pinning panel version to $panel_version in docker-compose.yml"
+                
+                # Создаем временный файл с подмененной версией
+                sed "s|image: remnawave/backend[:|$].*|image: remnawave/backend:$panel_version|g" \
+                    "$temp_backup_dir/docker-compose.yml" > "$temp_backup_dir/docker-compose.yml.tmp"
+                
+                # Проверяем что подмена прошла успешно
+                if [ -f "$temp_backup_dir/docker-compose.yml.tmp" ]; then
+                    mv "$temp_backup_dir/docker-compose.yml.tmp" "$temp_backup_dir/docker-compose.yml"
+                    log_message "Version pinned successfully: remnawave/backend -> remnawave/backend:$panel_version"
+                else
+                    log_message "WARNING: Failed to pin version, keeping original docker-compose.yml"
+                fi
+            else
+                log_message "WARNING: Could not determine panel version, docker-compose.yml will use 'latest' tag"
+            fi
+        fi
+    else
+        log_message "ERROR: Failed to copy application files"
+        rm -rf "$temp_backup_dir"
+        exit 1
+    fi
 else
-    log_message "ERROR: Failed to copy application files"
-    rm -rf "$temp_backup_dir"
-    exit 1
+    log_message "Step 2: Skipping configuration backup (--data-only mode)"
 fi
+
+# Шаги 2.5-2.7 и 3 выполняются только если не --data-only
+if [ "$INCLUDE_CONFIGS" = true ]; then
 
 # Шаг 2.5: Бэкап Telegram ботов (если найдены)
 log_message "Step 2.5: Checking for Telegram bot containers..."
@@ -3029,6 +3189,83 @@ else
     log_message "Telegram bot backup completed"
 fi
 
+# Шаг 2.6: Бэкап Caddy (если включен reverse proxy и Caddy установлен)
+INCLUDE_REVERSE_PROXY=$(jq -r '.include_reverse_proxy // true' "$CONFIG_FILE")
+CADDY_DIR="/opt/caddy-remnawave"
+
+if [ "$INCLUDE_REVERSE_PROXY" = "true" ] && [ -d "$CADDY_DIR" ]; then
+    log_message "Step 2.6: Backing up Caddy configuration..."
+    mkdir -p "$temp_backup_dir/caddy"
+    
+    caddy_files_count=0
+    for caddy_file in "$CADDY_DIR"/*.yml "$CADDY_DIR"/*.yaml "$CADDY_DIR"/.env \
+                      "$CADDY_DIR"/Caddyfile "$CADDY_DIR"/caddy-credentials.txt \
+                      "$CADDY_DIR"/docker-compose.yml; do
+        if [ -f "$caddy_file" ]; then
+            cp "$caddy_file" "$temp_backup_dir/caddy/" 2>/dev/null && caddy_files_count=$((caddy_files_count + 1))
+        fi
+    done
+    
+    if [ $caddy_files_count -gt 0 ]; then
+        # Определяем режим Caddy
+        local caddy_mode="simple"
+        if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
+            caddy_mode="secure"
+        fi
+        echo "caddy_mode=$caddy_mode" > "$temp_backup_dir/caddy/caddy-info.txt"
+        log_message "Caddy backed up ($caddy_files_count files, mode: $caddy_mode)"
+    else
+        log_message "WARNING: Caddy directory exists but no config files found"
+        rmdir "$temp_backup_dir/caddy" 2>/dev/null || true
+    fi
+elif [ "$INCLUDE_REVERSE_PROXY" = "true" ]; then
+    log_message "Caddy not installed at $CADDY_DIR, skipping"
+fi
+
+# Шаг 2.7: Бэкап Traefik (если включен reverse proxy и Traefik установлен)
+# Проверяем стандартные пути для Traefik
+TRAEFIK_DIR=""
+for traefik_path in "/opt/traefik" "/opt/traefik-remnawave" "/etc/traefik"; do
+    if [ -d "$traefik_path" ]; then
+        TRAEFIK_DIR="$traefik_path"
+        break
+    fi
+done
+
+if [ "$INCLUDE_REVERSE_PROXY" = "true" ] && [ -n "$TRAEFIK_DIR" ] && [ -d "$TRAEFIK_DIR" ]; then
+    log_message "Step 2.7: Backing up Traefik configuration from $TRAEFIK_DIR..."
+    mkdir -p "$temp_backup_dir/traefik"
+    
+    traefik_files_count=0
+    for traefik_file in "$TRAEFIK_DIR"/*.yml "$TRAEFIK_DIR"/*.yaml "$TRAEFIK_DIR"/*.toml \
+                        "$TRAEFIK_DIR"/.env "$TRAEFIK_DIR"/docker-compose.yml \
+                        "$TRAEFIK_DIR"/traefik.yml "$TRAEFIK_DIR"/traefik.toml; do
+        if [ -f "$traefik_file" ]; then
+            cp "$traefik_file" "$temp_backup_dir/traefik/" 2>/dev/null && traefik_files_count=$((traefik_files_count + 1))
+        fi
+    done
+    
+    # Бэкапим динамические конфиги если есть
+    if [ -d "$TRAEFIK_DIR/dynamic" ]; then
+        cp -r "$TRAEFIK_DIR/dynamic" "$temp_backup_dir/traefik/" 2>/dev/null || true
+        traefik_files_count=$((traefik_files_count + $(find "$TRAEFIK_DIR/dynamic" -type f 2>/dev/null | wc -l)))
+    fi
+    
+    if [ $traefik_files_count -gt 0 ]; then
+        echo "traefik_path=$TRAEFIK_DIR" > "$temp_backup_dir/traefik/traefik-info.txt"
+        log_message "Traefik backed up ($traefik_files_count files from $TRAEFIK_DIR)"
+    else
+        log_message "WARNING: Traefik directory exists but no config files found"
+        rmdir "$temp_backup_dir/traefik" 2>/dev/null || true
+    fi
+elif [ "$INCLUDE_REVERSE_PROXY" = "true" ]; then
+    log_message "Traefik not installed, skipping"
+fi
+
+if [ "$INCLUDE_REVERSE_PROXY" != "true" ]; then
+    log_message "Reverse proxy backup disabled in config, skipping Caddy/Traefik"
+fi
+
 # Шаг 3: Добавляем скрипт управления
 log_message "Step 3: Including management script..."
 
@@ -3039,6 +3276,8 @@ if [ -f "$script_source" ]; then
 else
     log_message "WARNING: Management script not found at $script_source"
 fi
+
+fi  # Конец if [ "$INCLUDE_CONFIGS" = true ]
 
 # Шаг 4: Создаем скрипт восстановления для volume (если используется volume backup)
 if [ "$BACKUP_TYPE" = "volume" ] || [ "$BACKUP_TYPE" = "both" ]; then
@@ -4992,6 +5231,101 @@ restore_full_from_archive() {
         else
             echo -e "\033[1;33m⚠️  Some Telegram bots failed to restore, check logs\033[0m"
             log_restore_operation "Telegram Bots Restore" "WARNING" "Some bots failed to restore"
+        fi
+    fi
+    
+    # Step 6.6: Восстановление Caddy (если есть в бэкапе)
+    if [ -d "$target_dir/caddy" ]; then
+        echo -e "\033[38;5;250m📝 Step 6.6:\033[0m Restoring Caddy configuration..."
+        local caddy_target="/opt/caddy-remnawave"
+        
+        if [ -d "$caddy_target" ]; then
+            echo -e "\033[38;5;244m   Caddy directory exists, backing up before restore...\033[0m"
+            cp -r "$caddy_target" "${caddy_target}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+        else
+            mkdir -p "$caddy_target"
+        fi
+        
+        # Копируем файлы Caddy
+        local caddy_restored=0
+        for caddy_file in "$target_dir/caddy"/*; do
+            if [ -f "$caddy_file" ]; then
+                local filename=$(basename "$caddy_file")
+                if [ "$filename" != "caddy-info.txt" ]; then
+                    cp "$caddy_file" "$caddy_target/" 2>/dev/null && caddy_restored=$((caddy_restored + 1))
+                fi
+            fi
+        done
+        
+        if [ $caddy_restored -gt 0 ]; then
+            echo -e "\033[1;32m✅ Caddy configuration restored ($caddy_restored files to $caddy_target)\033[0m"
+            log_restore_operation "Caddy Restore" "SUCCESS" "Caddy restored: $caddy_restored files"
+            
+            # Показываем подсказку о перезапуске Caddy
+            echo -e "\033[38;5;244m   💡 Restart Caddy: cd $caddy_target && docker compose restart\033[0m"
+        else
+            echo -e "\033[1;33m⚠️  No Caddy files were restored\033[0m"
+            log_restore_operation "Caddy Restore" "WARNING" "No files restored"
+        fi
+    fi
+    
+    # Step 6.7: Восстановление Traefik (если есть в бэкапе)
+    if [ -d "$target_dir/traefik" ]; then
+        echo -e "\033[38;5;250m📝 Step 6.7:\033[0m Restoring Traefik configuration..."
+        
+        # Определяем путь для восстановления Traefik
+        local traefik_target=""
+        
+        # Сначала проверяем сохранённый путь в info файле
+        if [ -f "$target_dir/traefik/traefik-info.txt" ]; then
+            traefik_target=$(grep "^traefik_path=" "$target_dir/traefik/traefik-info.txt" 2>/dev/null | cut -d'=' -f2)
+        fi
+        
+        # Если путь не найден, используем стандартный
+        if [ -z "$traefik_target" ]; then
+            for traefik_path in "/opt/traefik" "/opt/traefik-remnawave" "/etc/traefik"; do
+                if [ -d "$traefik_path" ]; then
+                    traefik_target="$traefik_path"
+                    break
+                fi
+            done
+        fi
+        
+        # Если путь всё ещё не определён, используем дефолтный
+        if [ -z "$traefik_target" ]; then
+            traefik_target="/opt/traefik"
+        fi
+        
+        if [ -d "$traefik_target" ]; then
+            echo -e "\033[38;5;244m   Traefik directory exists, backing up before restore...\033[0m"
+            cp -r "$traefik_target" "${traefik_target}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+        else
+            mkdir -p "$traefik_target"
+        fi
+        
+        # Копируем файлы Traefik
+        local traefik_restored=0
+        for traefik_file in "$target_dir/traefik"/*; do
+            if [ -f "$traefik_file" ]; then
+                local filename=$(basename "$traefik_file")
+                if [ "$filename" != "traefik-info.txt" ]; then
+                    cp "$traefik_file" "$traefik_target/" 2>/dev/null && traefik_restored=$((traefik_restored + 1))
+                fi
+            elif [ -d "$traefik_file" ]; then
+                # Копируем директории (например dynamic/)
+                cp -r "$traefik_file" "$traefik_target/" 2>/dev/null && traefik_restored=$((traefik_restored + 1))
+            fi
+        done
+        
+        if [ $traefik_restored -gt 0 ]; then
+            echo -e "\033[1;32m✅ Traefik configuration restored ($traefik_restored items to $traefik_target)\033[0m"
+            log_restore_operation "Traefik Restore" "SUCCESS" "Traefik restored: $traefik_restored items"
+            
+            # Показываем подсказку о перезапуске Traefik
+            echo -e "\033[38;5;244m   💡 Restart Traefik: cd $traefik_target && docker compose restart\033[0m"
+        else
+            echo -e "\033[1;33m⚠️  No Traefik files were restored\033[0m"
+            log_restore_operation "Traefik Restore" "WARNING" "No files restored"
         fi
     fi
     
@@ -9070,27 +9404,23 @@ backup_command() {
         exit 1
     fi
 
-    local compress=true         # По умолчанию сжимаем бэкап
-    local include_configs=true  # По умолчанию полный бэкап
-    local data_only=false       # Новый флаг для только БД
-    local include_caddy=false   # Включать Caddy в бэкап
+    # Собираем аргументы для передачи в backup скрипт
+    local backup_args=()
     
     # Парсинг аргументов
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
             --no-compress) 
-                compress=false 
+                backup_args+=("--no-compress")
                 ;;
             --data-only) 
-                include_configs=false 
-                data_only=true 
+                backup_args+=("--data-only")
                 ;;
-            --include-configs) 
-                include_configs=true 
-                data_only=false
+            --no-reverse-proxy)
+                backup_args+=("--no-reverse-proxy")
                 ;;
-            --include-caddy|--with-caddy)
-                include_caddy=true
+            --quiet|-q)
+                backup_args+=("--quiet")
                 ;;
             -h|--help) 
                 echo -e "\033[1;37m💾 Remnawave Backup System\033[0m"
@@ -9099,20 +9429,20 @@ backup_command() {
                 echo -e "  \033[38;5;15m$APP_NAME backup\033[0m [\033[38;5;244moptions\033[0m]"
                 echo
                 echo -e "\033[1;37mOptions:\033[0m"
-                echo -e "  \033[38;5;244m--no-compress\033[0m       Create uncompressed backup (default: compressed)"
+                echo -e "  \033[38;5;244m--no-compress\033[0m       Create uncompressed backup"
                 echo -e "  \033[38;5;244m--data-only\033[0m         Backup database only (no configs)"
-                echo -e "  \033[38;5;244m--include-configs\033[0m   Force include configuration files (default)"
-                echo -e "  \033[38;5;244m--include-caddy\033[0m     Include Caddy reverse proxy config (if installed)"
+                echo -e "  \033[38;5;244m--no-reverse-proxy\033[0m  Skip Caddy/Traefik backup"
+                echo -e "  \033[38;5;244m--quiet, -q\033[0m         Minimal output (for scripts)"
                 echo -e "  \033[38;5;244m--help, -h\033[0m          Show this help"
                 echo
                 echo -e "\033[1;37mExamples:\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup\033[0m                           \033[38;5;8m# Full backup (default)\033[0m"
-                echo -e "  \033[38;5;15m$APP_NAME backup --compress\033[0m                \033[38;5;8m# Compressed full backup\033[0m"
                 echo -e "  \033[38;5;15m$APP_NAME backup --data-only\033[0m               \033[38;5;8m# Database only\033[0m"
-                echo -e "  \033[38;5;15m$APP_NAME backup --include-caddy\033[0m           \033[38;5;8m# Include Caddy config\033[0m"
-                echo -e "  \033[38;5;15m$APP_NAME backup --data-only --compress\033[0m    \033[38;5;8m# Compressed database only\033[0m"
+                echo -e "  \033[38;5;15m$APP_NAME backup --no-compress\033[0m             \033[38;5;8m# No compression\033[0m"
+                echo -e "  \033[38;5;15m$APP_NAME backup --no-reverse-proxy\033[0m        \033[38;5;8m# Skip Caddy/Traefik\033[0m"
                 echo
-                echo -e "\033[38;5;8mDefault: Full backup includes database + configuration files\033[0m"
+                echo -e "\033[38;5;8mDefault: Full backup (database + configs + reverse proxy)\033[0m"
+                echo -e "\033[38;5;8mSettings can be configured via: $APP_NAME schedule setup\033[0m"
                 exit 0
                 ;;
             *) 
@@ -9143,420 +9473,41 @@ backup_command() {
         exit 1
     fi
 
-    # Получаем данные подключения к БД
-    local POSTGRES_USER=$(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d '=' -f2)
-    local POSTGRES_PASSWORD=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d '=' -f2)
-    local POSTGRES_DB=$(grep "^POSTGRES_DB=" "$ENV_FILE" | cut -d '=' -f2)
-
-    # Устанавливаем значения по умолчанию
-    POSTGRES_USER=${POSTGRES_USER:-postgres}
-    POSTGRES_DB=${POSTGRES_DB:-postgres}
-
-    if [ -z "$POSTGRES_PASSWORD" ]; then
-        colorized_echo red "POSTGRES_PASSWORD not found in .env file!"
+    # Создаём backup скрипт если не существует
+    if [ ! -f "$BACKUP_SCRIPT_FILE" ]; then
+        echo -e "\033[38;5;250m📝 Creating backup script...\033[0m"
+        schedule_create_backup_script
+    fi
+    
+    # Убедимся что есть конфиг
+    if ! ensure_backup_dirs; then
+        colorized_echo red "Failed to create backup directories!"
         exit 1
     fi
-
-    # Создаем директорию для бэкапов
-    local BACKUP_DIR="$APP_DIR/backups"
-    mkdir -p "$BACKUP_DIR"
-
-    # Генерируем имя файла
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_name=""
-    local backup_path=""
     
-    if [ "$include_configs" = true ]; then
-        # Полный бэкап с конфигами
-        backup_name="remnawave_full_${timestamp}"
-        local backup_dir="$BACKUP_DIR/$backup_name"
-        mkdir -p "$backup_dir"
+    # Запускаем backup скрипт с переданными аргументами
+    echo -e "\033[1;37m💾 Starting backup...\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    
+    if bash "$BACKUP_SCRIPT_FILE" "${backup_args[@]}"; then
+        echo
+        echo -e "\033[1;32m✅ Backup completed successfully!\033[0m"
         
-        echo -e "\033[1;37m💾 Creating full system backup...\033[0m"
-        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
-        
-        # Создаем дамп базы данных
-        echo -e "\033[38;5;250m📝 Step 1:\033[0m Exporting database..."
-        if docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \
-            pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F p --verbose > "$backup_dir/database.sql" 2>/dev/null; then
-            local db_size=$(du -sh "$backup_dir/database.sql" | cut -f1)
-            echo -e "\033[1;32m✅ Database exported successfully ($db_size)\033[0m"
-        else
-            echo -e "\033[1;31m❌ Database export failed!\033[0m"
-            rm -rf "$backup_dir"
-            exit 1
-        fi
-        
-        # Универсальное копирование конфигурационных файлов
-        echo -e "\033[38;5;250m📝 Step 2:\033[0m Including configuration files..."
-        
-        local config_count=0
-        
-        # Получаем текущую версию панели для подмены в docker-compose.yml
-        local current_panel_version=$(get_panel_version)
-        
-        if [ "$current_panel_version" = "unknown" ] || [ -z "$current_panel_version" ]; then
-            echo -e "\033[1;33m   ⚠️  WARNING: Could not determine panel version from container\033[0m"
-            echo -e "\033[38;5;244m      docker-compose.yml will keep original image tag\033[0m"
-        fi
-        
-        # Копируем основные конфигурационные файлы прямо в корень бэкапа
-        echo -e "\033[38;5;244m   Copying main configuration files...\033[0m"
-        for config_file in "$ENV_FILE" "$SUB_ENV_FILE" "$COMPOSE_FILE"; do
-            if [ -f "$config_file" ]; then
-                local filename=$(basename "$config_file")
-                
-                # Специальная обработка для docker-compose.yml
-                if [ "$filename" = "docker-compose.yml" ] && [ "$current_panel_version" != "unknown" ] && [ -n "$current_panel_version" ]; then
-                    # Создаем копию с подменой latest на конкретную версию
-                    echo -e "\033[38;5;244m   ✓ $filename (pinning version to $current_panel_version)\033[0m"
-                    
-                    # Подменяем любой вариант remnawave/backend на конкретную версию
-                    sed "s|image: remnawave/backend[:|$].*|image: remnawave/backend:$current_panel_version|g" "$config_file" > "$backup_dir/$filename"
-                else
-                    cp "$config_file" "$backup_dir/"
-                    echo -e "\033[38;5;244m   ✓ $filename\033[0m"
-                fi
-                
-                config_count=$((config_count + 1))
-            fi
-        done
-        
-        # Копируем дополнительные конфигурационные файлы по расширениям
-        echo -e "\033[38;5;244m   Scanning for additional config files...\033[0m"
-        local extensions=("json" "yml" "yaml" "toml" "ini" "conf" "config" "cfg")
-        
-        for ext in "${extensions[@]}"; do
-            for config_file in "$APP_DIR"/*."$ext"; do
-                if [ -f "$config_file" ]; then
-                    local filename=$(basename "$config_file")
-                    # Исключаем файлы, которые могут быть временными или логами
-                    if [[ ! "$filename" =~ ^(temp|tmp|cache|log|debug) ]]; then
-                        cp "$config_file" "$backup_dir/"
-                        config_count=$((config_count + 1))
-                        echo -e "\033[38;5;244m   ✓ $filename\033[0m"
-                    fi
-                fi
-            done
-        done
-        
-        # Копируем важные директории с конфигурациями
-        echo -e "\033[38;5;244m   Checking for configuration directories...\033[0m"
-        local config_dirs=("certs" "certificates" "ssl" "configs" "config" "custom" "themes" "plugins")
-        
-        for dir_name in "${config_dirs[@]}"; do
-            local config_dir="$APP_DIR/$dir_name"
-            if [ -d "$config_dir" ] && [ "$(ls -A "$config_dir" 2>/dev/null)" ]; then
-                cp -r "$config_dir" "$backup_dir/"
-                local dir_files=$(find "$config_dir" -type f | wc -l)
-                config_count=$((config_count + dir_files))
-                echo -e "\033[38;5;244m   ✓ $dir_name/ ($dir_files files)\033[0m"
-            fi
-        done
-        
-        # Бэкап Caddy (если установлен и запрошен)
-        if [ "$include_caddy" = true ] && [ -d "$CADDY_DIR" ]; then
-            echo -e "\033[38;5;244m   Backing up Caddy configuration...\033[0m"
-            mkdir -p "$backup_dir/caddy"
-            
-            # Копируем конфиги Caddy (без логов)
-            for caddy_file in "$CADDY_DIR"/*.yml "$CADDY_DIR"/*.yaml "$CADDY_DIR"/.env "$CADDY_DIR"/Caddyfile "$CADDY_DIR"/caddy-credentials.txt; do
-                if [ -f "$caddy_file" ]; then
-                    cp "$caddy_file" "$backup_dir/caddy/" 2>/dev/null || true
-                    config_count=$((config_count + 1))
-                fi
-            done
-            
-            # Определяем режим Caddy
-            local caddy_mode="simple"
-            if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
-                caddy_mode="secure"
-            fi
-            echo "caddy_mode=$caddy_mode" > "$backup_dir/caddy/caddy-info.txt"
-            
-            echo -e "\033[38;5;244m   ✓ caddy/ (mode: $caddy_mode)\033[0m"
-        elif [ "$include_caddy" = true ]; then
-            echo -e "\033[38;5;244m   ⚠️  Caddy not installed, skipping\033[0m"
-        fi
-        
-        # Создаем метаданные
-        echo -e "\033[38;5;250m📝 Step 3:\033[0m Creating backup metadata..."
-        
-        # Получаем версию панели
-        local panel_version=$(get_panel_version)
-        
-        cat > "$backup_dir/backup-metadata.json" << EOF
-{
-    "backup_type": "full",
-    "timestamp": "$timestamp",
-    "app_name": "$APP_NAME",
-    "script_version": "$SCRIPT_VERSION",
-    "panel_version": "$panel_version",
-    "database_included": true,
-    "configs_included": true,
-    "config_files_count": $config_count,
-    "hostname": "$(hostname)",
-    "backup_size": "calculated_after_compression"
-}
-EOF
-        
-        # Создаем информационный файл
-        cat > "$backup_dir/backup_info.txt" << EOF
-Remnawave Panel Backup Information
-==================================
-
-Backup Date: $(date)
-Backup Type: Full System Backup
-Script Version: $SCRIPT_VERSION
-Panel Version: $panel_version (pinned in docker-compose.yml)
-Hostname: $(hostname)
-
-Included Components:
-✓ PostgreSQL Database (complete dump)
-✓ Environment Files (.env, .env.subscription)
-✓ Docker Compose Configuration (version pinned to $panel_version)
-✓ Additional Config Files ($config_count files)
-✓ Configuration Directories
-✓ SSL Certificates (if present)
-
-⚠️  IMPORTANT: This backup uses PINNED version ($panel_version) instead of 'latest'
-   This ensures exact version compatibility during restore and prevents
-   potential issues from automatic version upgrades.
-
-Restoration:
-=============
-
-🚀 RECOMMENDED METHOD (Automatic):
-----------------------------------
-1. Transfer backup file to target server
-2. Install management script (if not installed):
-   • curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh -o remnawave.sh
-   • sudo bash remnawave.sh @ install-script --name $APP_NAME
-3. Use built-in restore function:
-   • sudo $APP_NAME restore --file $(basename "$backup_path")
-
-✅ This method includes:
-   • Automatic panel installation (if needed)
-   • Version compatibility checking
-   • Safety backup creation
-   • Database restoration with error handling
-   • Configuration file copying
-   • Service management
-
-🛠️ MANUAL METHOD (Advanced users only):
----------------------------------------
-Only use if automatic restore fails or for custom scenarios.
-
-New Installation:
-1. Download: curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh
-2. Install script: sudo bash remnawave.sh @ install-script --name $APP_NAME
-3. Create directory: sudo mkdir -p $APP_DIR
-4. Extract: tar -xzf $(basename "$backup_path")
-5. Copy all configs: sudo cp -r $(basename "$backup_path" .tar.gz)/* $APP_DIR/
-6. Set permissions: sudo chown -R root:root $APP_DIR
-7. Start services: sudo $APP_NAME up -d
-8. Wait for DB: sleep 15
-9. Clear DB: docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-10. Restore DB: cat $(basename "$backup_path" .tar.gz)/database.sql | docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB
-11. Restart: sudo $APP_NAME restart
-
-Existing Installation:
-1. Stop: sudo $APP_NAME down
-2. Safety backup: sudo $APP_NAME backup --data-only
-3. Extract: tar -xzf $(basename "$backup_path")
-4. Clear DB: docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-5. Restore DB: cat $(basename "$backup_path" .tar.gz)/database.sql | docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB
-6. Start: sudo $APP_NAME up
-
-⚠️  IMPORTANT: Target system must have compatible Remnawave Panel version ($panel_version)
-
-Generated by Remnawave Management CLI v$SCRIPT_VERSION
-EOF
-        
-        echo -e "\033[1;32m✅ Configuration files included ($config_count items)\033[0m"
-        
-        # Компрессия если требуется
-        if [ "$compress" = true ]; then
-            echo -e "\033[38;5;250m📝 Step 4:\033[0m Compressing backup..."
-            cd "$BACKUP_DIR" || exit 1
-            if tar -czf "${backup_name}.tar.gz" "$backup_name" 2>/dev/null; then
-                local compressed_size=$(du -sh "${backup_name}.tar.gz" | cut -f1)
-                echo -e "\033[1;32m✅ Backup compressed successfully ($compressed_size)\033[0m"
-                backup_path="$BACKUP_DIR/${backup_name}.tar.gz"
-                
-                # Удаляем некомпрессированную версию
-                rm -rf "$backup_dir"
-            else
-                echo -e "\033[1;31m❌ Compression failed, keeping uncompressed backup\033[0m"
-                backup_path="$backup_dir"
-            fi
-        else
-            backup_path="$backup_dir"
-        fi
-        
-    else
-        # Простой бэкап только базы данных  
-        echo -e "\033[1;37m💾 Creating database backup...\033[0m"
-        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
-        echo -e "\033[38;5;250mDatabase: $POSTGRES_DB\033[0m"
-        echo -e "\033[38;5;250mContainer: $db_container\033[0m"
-        
-        # Создаем бэкап
-        if [ "$compress" = true ]; then
-            # Проверяем наличие gzip
-            if ! command -v gzip >/dev/null 2>&1; then
-                colorized_echo yellow "Warning: gzip not found, creating uncompressed backup instead"
-                backup_name="remnawave_db_${timestamp}.sql"
-                backup_path="$BACKUP_DIR/$backup_name"
-                echo -e "\033[38;5;250mBackup file: $backup_name\033[0m"
-                echo
-                if docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \
-                    pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F p --verbose > "$backup_path" 2>/dev/null; then
-                    local backup_size=$(du -sh "$backup_path" | cut -f1)
-                    echo -e "\033[1;32m✅ Database backup created successfully ($backup_size)!\033[0m"
-                else
-                    echo -e "\033[1;31m❌ Database backup failed!\033[0m"
-                    rm -f "$backup_path"
-                    exit 1
-                fi
-            else
-                backup_name="remnawave_db_${timestamp}.sql.gz"
-                backup_path="$BACKUP_DIR/$backup_name"
-                echo -e "\033[38;5;250mBackup file: $backup_name\033[0m"
-                echo
-                if docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \
-                    pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F p --verbose 2>/dev/null | \
-                    gzip > "$backup_path"; then
-                    local backup_size=$(du -sh "$backup_path" | cut -f1)
-                    echo -e "\033[1;32m✅ Compressed database backup created successfully ($backup_size)!\033[0m"
-                else
-                    echo -e "\033[1;31m❌ Database backup failed!\033[0m"
-                    rm -f "$backup_path"
-                    exit 1
-                fi
-            fi
-        else
-            backup_name="remnawave_db_${timestamp}.sql"
-            backup_path="$BACKUP_DIR/$backup_name"
-            echo -e "\033[38;5;250mBackup file: $backup_name\033[0m"
+        # Показываем последний созданный бэкап
+        local latest_backup=$(ls -t "$APP_DIR/backups"/remnawave_*.tar.gz 2>/dev/null | head -1)
+        if [ -n "$latest_backup" ] && [ -f "$latest_backup" ]; then
+            local backup_size=$(du -sh "$latest_backup" | cut -f1)
             echo
-            if docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \ 
-                pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F p --verbose > "$backup_path" 2>/dev/null; then
-                local backup_size=$(du -sh "$backup_path" | cut -f1)
-                echo -e "\033[1;32m✅ Database backup created successfully ($backup_size)!\033[0m"
-            else
-                echo -e "\033[1;31m❌ Database backup failed!\033[0m"
-                rm -f "$backup_path"
-                exit 1
-            fi
-        fi
-    fi
-
-    # Показываем итоговую информацию
-    echo
-    echo -e "\033[1;37m📋 Backup Information:\033[0m"
-    printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Location:" "$backup_path"
-    
-    if [ -f "$backup_path" ]; then
-        local file_size=$(du -sh "$backup_path" | cut -f1)
-        printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Size:" "$file_size"
-    elif [ -d "$backup_path" ]; then
-        local dir_size=$(du -sh "$backup_path" | cut -f1)
-        printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Size:" "$dir_size"
-    fi
-    
-    # Показываем версию панели
-    local current_panel_version=$(get_panel_version)
-    printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Panel:" "v$current_panel_version"
-    
-    if [ "$include_configs" = true ]; then
-        if [ "$current_panel_version" != "unknown" ]; then
-            printf "   \033[38;5;15m%-12s\033[0m \033[1;32m%s\033[0m\n" "Version:" "Pinned to v$current_panel_version (not 'latest')"
-        fi
-        
-        if [ "$compress" = true ]; then
-            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Type:" "Full backup (database + configs, compressed)"
-        else
-            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Type:" "Full backup (database + configs)"
+            echo -e "\033[1;37m📋 Backup Information:\033[0m"
+            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "File:" "$(basename "$latest_backup")"
+            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Size:" "$backup_size"
+            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Location:" "$APP_DIR/backups/"
         fi
     else
-        if [ "$compress" = true ]; then
-            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Type:" "Database only (compressed)"
-        else
-            printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Type:" "Database only"
-        fi
-    fi
-    
-    if [ "$compress" = true ]; then
-        printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s\033[0m\n" "Compression:" "gzip"
-    fi
-    echo
-    
-    # Показываем как восстановить
-    echo -e "\033[1;37m🔄 To restore this backup:\033[0m"
-    if [ "$include_configs" = true ]; then
-        echo -e "\033[1;32m✓ Full system backup - includes database and all configuration files\033[0m"
         echo
-        echo -e "\033[1;37m🚀 RECOMMENDED: Use built-in restore function\033[0m"
-        echo -e "\033[38;5;244m1. Transfer backup to target server\033[0m"
-        echo -e "\033[38;5;244m2. Install script: curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh -o remnawave.sh\033[0m"
-        echo -e "\033[38;5;244m3. Install manager: sudo bash remnawave.sh @ install-script --name $APP_NAME\033[0m"
-        echo -e "\033[38;5;244m4. Restore: sudo $APP_NAME restore --file \"$(basename "$backup_path")\"\033[0m"
-        echo
-        echo -e "\033[38;5;8m   ✅ Includes automatic version checking, safety backups, and error handling\033[0m"
-        echo
-        echo -e "\033[1;37m🛠️  MANUAL METHOD (if automatic fails):\033[0m"
-        echo -e "\033[38;5;244mNew installation:\033[0m"
-        echo -e "\033[38;5;244m1. Download: curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh\033[0m"
-        echo -e "\033[38;5;244m2. Install script: sudo bash remnawave.sh @ install-script --name $APP_NAME\033[0m"
-        echo -e "\033[38;5;244m3. Create directory: sudo mkdir -p $APP_DIR\033[0m"
-        if [ "$compress" = true ]; then
-            echo -e "\033[38;5;244m4. Extract: tar -xzf \"$(basename "$backup_path")\"\033[0m"
-            echo -e "\033[38;5;244m5. Copy all configs: sudo cp -r $(basename "$backup_path" .tar.gz)/* $APP_DIR/\033[0m"
-            echo -e "\033[38;5;244m6. Set permissions: sudo chown -R root:root $APP_DIR\033[0m"
-            echo -e "\033[38;5;244m7. Start services: sudo $APP_NAME up -d\033[0m"
-            echo -e "\033[38;5;244m8. Wait for DB: sleep 15\033[0m"
-            echo -e "\033[38;5;244m9. Clear DB: docker exec -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\"\033[0m"
-            echo -e "\033[38;5;244m10. Restore DB: cat $(basename "$backup_path" .tar.gz)/database.sql | docker exec -i -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB\033[0m"
-            echo -e "\033[38;5;244m11. Restart: sudo $APP_NAME restart\033[0m"
-        else
-            echo -e "\033[38;5;244m4. Copy all configs: sudo cp -r $(basename "$backup_path")/* $APP_DIR/\033[0m"
-            echo -e "\033[38;5;244m5. Set permissions: sudo chown -R root:root $APP_DIR\033[0m"
-            echo -e "\033[38;5;244m6. Start services: sudo $APP_NAME up -d\033[0m"
-            echo -e "\033[38;5;244m7. Wait for DB: sleep 15\033[0m"
-            echo -e "\033[38;5;244m8. Clear DB: docker exec -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\"\033[0m"
-            echo -e "\033[38;5;244m9. Restore DB: cat $(basename "$backup_path")/database.sql | docker exec -i -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB\033[0m"
-            echo -e "\033[38;5;244m10. Restart: sudo $APP_NAME restart\033[0m"
-        fi
-    else
-        echo -e "\033[1;33m⚠️  Database-only backup - configuration files not included\033[0m"
-        echo -e "\033[38;5;244mRequires existing Remnawave installation with same version ($panel_version)\033[0m"
-        echo
-        echo -e "\033[1;37m🚀 RECOMMENDED: Use built-in restore function\033[0m"
-        echo -e "\033[38;5;244m1. Transfer backup to target server\033[0m"
-        echo -e "\033[38;5;244m2. Restore: sudo $APP_NAME restore --database-only --file \"$(basename "$backup_path")\"\033[0m"
-        echo
-        echo -e "\033[1;37m🛠️  MANUAL METHOD:\033[0m"
-        if [ "$compress" = true ]; then
-            echo -e "\033[38;5;244m1. Stop: sudo $APP_NAME down\033[0m"
-            echo -e "\033[38;5;244m2. Clear DB: docker exec -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\"\033[0m"
-            echo -e "\033[38;5;244m3. Restore: zcat \"$(basename "$backup_path")\" | docker exec -i -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB\033[0m"
-            echo -e "\033[38;5;244m4. Start: sudo $APP_NAME up\033[0m"
-        else
-            echo -e "\033[38;5;244m1. Stop: sudo $APP_NAME down\033[0m"
-            echo -e "\033[38;5;244m2. Clear DB: docker exec -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\"\033[0m"
-            echo -e "\033[38;5;244m3. Restore: cat \"$(basename "$backup_path")\" | docker exec -i -e PGPASSWORD=\"$POSTGRES_PASSWORD\" ${APP_NAME}-db psql -U $POSTGRES_USER -d $POSTGRES_DB\033[0m"
-            echo -e "\033[38;5;244m4. Start: sudo $APP_NAME up\033[0m"
-        fi
-    fi
-    echo
-    
-    # Автоматическая очистка старых бэкапов (оставляем последние 10)
-    local old_backups=$(ls -t "$BACKUP_DIR"/remnawave_*_*.{sql*,tar.gz} 2>/dev/null | tail -n +11)
-    if [ -n "$old_backups" ]; then
-        echo "$old_backups" | xargs rm -rf
-        local removed_count=$(echo "$old_backups" | wc -l)
-        echo -e "\033[38;5;8m🧹 Cleaned up $removed_count old backup(s) (keeping last 10)\033[0m"
+        echo -e "\033[1;31m❌ Backup failed!\033[0m"
+        echo -e "\033[38;5;8m   Check logs: $BACKUP_LOG_FILE\033[0m"
+        exit 1
     fi
 }
 
