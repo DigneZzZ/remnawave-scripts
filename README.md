@@ -167,15 +167,16 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 ### 🛠 Management Commands
 
 #### Core Operations
-| Command | Description | Usage |
-|---------|-------------|-------|
-| `install` | Install Remnawave Panel | `remnawave install [--dev] [--name NAME]` |
-| `update` | Update script and containers | `remnawave update` |
-| `uninstall` | Remove panel completely | `remnawave uninstall` |
-| `up` | Start all services | `remnawave up` |
-| `down` | Stop all services | `remnawave down` |
-| `restart` | Restart panel | `remnawave restart` |
-| `status` | Show service status | `remnawave status` |
+| Command          | Description                   | Usage                                                   |
+|------------------|-------------------------------|---------------------------------------------------------|
+| `install`        | Install Remnawave Panel       | `remnawave install [--dev] [--name NAME]`               |
+| `install-script` | Install Remnawave bash script | `remnawave install-script [--name NAME] [--source URL]` |
+| `update`         | Update script and containers  | `remnawave update`                                      |
+| `uninstall`      | Remove panel completely       | `remnawave uninstall`                                   |
+| `up`             | Start all services            | `remnawave up`                                          |
+| `down`           | Stop all services             | `remnawave down`                                        |
+| `restart`        | Restart panel                 | `remnawave restart`                                     |
+| `status`         | Show service status           | `remnawave status`                                      |
 
 #### Configuration & Maintenance
 | Command | Description | Usage |
@@ -506,22 +507,23 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 
 ### 🛠 Management Commands
 
-| Command | Description | Usage |
-|---------|-------------|-------|
-| `install` | Install RemnaNode | `remnanode install [--dev] [--name NAME]` |
-| `update` | Update script and container | `remnanode update` |
-| `uninstall` | Remove node and data | `remnanode uninstall` |
-| `up` | Start node services | `remnanode up` |
-| `down` | Stop node services | `remnanode down` |
-| `restart` | Restart node | `remnanode restart` |
-| `status` | Show service status | `remnanode status` |
-| `logs` | View container logs | `remnanode logs` |
-| `core-update` | Update Xray-core binary | `remnanode core-update` |
-| `edit` | Edit docker-compose.yml | `remnanode edit` |
-| `edit-env` | Edit .env file | `remnanode edit-env` |
-| `setup-logs` | Configure log rotation | `remnanode setup-logs` |
-| `xray_log_out` | Monitor Xray output logs | `remnanode xray_log_out` |
-| `xray_log_err` | Monitor Xray error logs | `remnanode xray_log_err` |
+| Command          | Description                   | Usage                                                   |
+|------------------|-------------------------------|---------------------------------------------------------|
+| `install`        | Install RemnaNode             | `remnanode install [--dev] [--name NAME]`               |
+| `install-script` | Install RemnaNode bash script | `remnanode install-script [--name NAME] [--source URL]` |
+| `update`         | Update script and container   | `remnanode update`                                      |
+| `uninstall`      | Remove node and data          | `remnanode uninstall`                                   |
+| `up`             | Start node services           | `remnanode up`                                          |
+| `down`           | Stop node services            | `remnanode down`                                        |
+| `restart`        | Restart node                  | `remnanode restart`                                     |
+| `status`         | Show service status           | `remnanode status`                                      |
+| `logs`           | View container logs           | `remnanode logs`                                        |
+| `core-update`    | Update Xray-core binary       | `remnanode core-update`                                 |
+| `edit`           | Edit docker-compose.yml       | `remnanode edit`                                        |
+| `edit-env`       | Edit .env file                | `remnanode edit-env`                                    |
+| `setup-logs`     | Configure log rotation        | `remnanode setup-logs`                                  |
+| `xray_log_out`   | Monitor Xray output logs      | `remnanode xray_log_out`                                |
+| `xray_log_err`   | Monitor Xray error logs       | `remnanode xray_log_err`                                |
 
 ---
 
