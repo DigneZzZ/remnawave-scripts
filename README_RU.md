@@ -2,7 +2,7 @@
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![Версия](https://img.shields.io/badge/версия-5.4.1-blue.svg)](#)
+[![Версия](https://img.shields.io/badge/версия-5.4.5-blue.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐_Языки-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Инсталлятор-Remnawave-brightgreen)](#-установщик-remnawave-panel)
 [![RemnaNode](https://img.shields.io/badge/Инсталлятор-RemnaNode-lightgrey)](#-установщик-remnanode)
@@ -843,7 +843,7 @@ selfsteal template download speedtest
 * jq (для обработки JSON)
 * unzip / tar / gzip
 
-**Текстовые редакторы (автообнаружение):**
+**Текстовые редакторы (авто-обнаружение):**
 * nano (по умолчанию)
 * vim / vi
 * micro
@@ -1017,7 +1017,7 @@ selfsteal logs
 
 **🔗 GIG.ovh**  
 * **Сайт**: [https://gig.ovh](https://gig.ovh)
-* **ФОКУС**: Форум сообщества нового поколения с AI ChatBot, VIP группами и другим..
+* **ФОКУС**: Форум сообщества нового поколения с AI ChatBot, VIP группами и другим...
 
 
 ---

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-5.4.1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-5.4.5-blue.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
