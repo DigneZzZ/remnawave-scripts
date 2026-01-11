@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.4.4
+# VERSION=5.4.5
 
-SCRIPT_VERSION="5.4.4"
+SCRIPT_VERSION="5.4.5"
 BACKUP_SCRIPT_VERSION="1.1.7"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -4472,7 +4472,7 @@ restore_from_backup() {
         mkdir -p "$temp_analysis_dir"
         
         # Извлекаем только метаданные для анализа
-        tar -xzf "$backup_file" -C "$temp_analysis_dir" "*/backup-metadata.json" 2>/dev/null || true
+        tar -xzf "$backup_file" -C "$temp_analysis_dir" --wildcards "*/backup-metadata.json" 2>/dev/null || true
         
         local metadata_file=$(find "$temp_analysis_dir" -name "backup-metadata.json" 2>/dev/null | head -1)
         
