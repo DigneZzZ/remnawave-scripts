@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.6.0
+# VERSION=5.6.1
 
-SCRIPT_VERSION="5.6.0"
+SCRIPT_VERSION="5.6.1"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1351,12 +1351,14 @@ schedule_configure_schedule() {
     echo -e "   \033[38;5;15m3)\033[0m Every 12 hours"
     echo -e "   \033[38;5;15m4)\033[0m Weekly (Sunday 2:00 AM)"
     echo -e "   \033[38;5;15m5)\033[0m Custom cron expression"
+    echo -e "   \033[38;5;15m0)\033[0m Back"
     echo
     
-    read -p "Select schedule [1-5]: " choice
+    read -p "Select schedule [0-5]: " choice
     
     local cron_expression=""
     case "$choice" in
+        0) return ;;
         1) cron_expression="0 2 * * *" ;;
         2) cron_expression="0 4 * * *" ;;
         3) cron_expression="0 */12 * * *" ;;
