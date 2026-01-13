@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.6.1
+# VERSION=5.7.0
 
-SCRIPT_VERSION="5.6.1"
+SCRIPT_VERSION="5.7.0"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9167,14 +9167,31 @@ colorized_echo green "Subscription environment saved in $SUB_ENV_FILE"
 
     colorized_echo blue "Generating docker-compose.yml file"
     cat > "$COMPOSE_FILE" <<EOL
+x-common: &common
+    ulimits:
+        nofile:
+            soft: 1048576
+            hard: 1048576
+    restart: always
+    networks:
+        - ${APP_NAME}-network
+
+x-logging: &logging
+    logging:
+        driver: json-file
+        options:
+            max-size: "100m"
+            max-file: "5"
+
+x-env: &env
+    env_file: .env
+
 services:
     remnawave-db:
-        image: postgres:17
+        image: postgres:17.6
         container_name: '${APP_NAME}-db'
         hostname: ${APP_NAME}-db
-        restart: always
-        env_file:
-            - .env
+        <<: [*common, *logging, *env]
         environment:
             - POSTGRES_USER=\${POSTGRES_USER}
             - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
@@ -9184,82 +9201,66 @@ services:
             - '127.0.0.1:6767:5432'
         volumes:
             - ${APP_NAME}-db-data:/var/lib/postgresql/data
-        networks:
-            - ${APP_NAME}-network
         healthcheck:
             test: ['CMD-SHELL', 'pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}']
             interval: 3s
             timeout: 10s
             retries: 3
-        logging:
-          driver: json-file
-          options:
-            max-size: "30m"
-            max-file: "5"
 
 
     remnawave:
         image: remnawave/backend:${BACKEND_IMAGE_TAG}
         container_name: '${APP_NAME}'
         hostname: ${APP_NAME}
-        restart: always
+        <<: [*common, *logging, *env]
         ports:
-            - '127.0.0.1:${APP_PORT}:${APP_PORT}'
-            - '127.0.0.1:${METRICS_PORT}:${METRICS_PORT}'
-        env_file:
-            - .env
-        networks:
-            - ${APP_NAME}-network
+            - '127.0.0.1:${APP_PORT}:\${APP_PORT:-3000}'
+            - '127.0.0.1:${METRICS_PORT}:\${METRICS_PORT:-3001}'
+        healthcheck:
+            test: ['CMD-SHELL', 'curl -f http://localhost:\${METRICS_PORT:-3001}/health']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
         depends_on:
-          remnawave-db:
-            condition: service_healthy
-          remnawave-redis:
-            condition: service_healthy
-        logging:
-          driver: json-file
-          options:
-            max-size: "30m"
-            max-file: "5"
-            
+            remnawave-db:
+                condition: service_healthy
+            remnawave-redis:
+                condition: service_healthy
+
 
     remnawave-subscription-page:
         image: remnawave/subscription-page:latest
         container_name: ${APP_NAME}-subscription-page
         hostname: ${APP_NAME}-subscription-page
-        restart: always
+        <<: [*common, *logging]
         env_file:
             - .env.subscription
         ports:
-            - '127.0.0.1:${SUB_PAGE_PORT}:${SUB_PAGE_PORT}'
-        networks:
-            - ${APP_NAME}-network
-        logging:
-          driver: json-file
-          options:
-            max-size: "30m"
-            max-file: "5"
-            
+            - '127.0.0.1:${SUB_PAGE_PORT}:\${APP_PORT:-3010}'
+        depends_on:
+            - remnawave
+
 
     remnawave-redis:
-        image: valkey/valkey:8.0.2-alpine
+        image: valkey/valkey:8.1-alpine
         container_name: ${APP_NAME}-redis
         hostname: ${APP_NAME}-redis
-        restart: always
-        networks:
-            - ${APP_NAME}-network
+        <<: [*common, *logging]
         volumes:
             - ${APP_NAME}-redis-data:/data
+        command: >
+            valkey-server
+            --save ""
+            --appendonly no
+            --maxmemory-policy noeviction
+            --loglevel warning
         healthcheck:
-            test: [ "CMD", "valkey-cli", "ping" ]
+            test: ['CMD', 'valkey-cli', 'ping']
             interval: 3s
-            timeout: 10s
+            timeout: 3s
             retries: 3
-        logging:
-            driver: json-file
-            options:
-                max-size: "30m"
-                max-file: "5"
-        
+
 
 networks:
     ${APP_NAME}-network:
