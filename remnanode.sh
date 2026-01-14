@@ -1992,7 +1992,7 @@ get_xray_core() {
                 if [ -n "$current_version" ] && [ $count -lt $max_count ]; then
                     versions+=("$current_version")
                     prereleases+=("$is_prerelease")
-                    ((count++))
+                    ((count++)) || true
                 fi
                 current_version=""
             fi
