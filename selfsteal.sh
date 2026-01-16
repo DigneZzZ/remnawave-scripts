@@ -238,8 +238,8 @@ install_acme() {
     fi
     rm -f "$temp_script"
     
-    # Source bashrc to load acme.sh
-    [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
+    # Note: Don't source .bashrc directly - it contains 'return' for non-interactive shells
+    # which would terminate the entire script. Instead, just search for acme.sh in known paths.
     
     [ "$DEBUG_MODE" = true ] && echo "DEBUG: Checking for acme.sh at $ACME_HOME/acme.sh"
     [ "$DEBUG_MODE" = true ] && echo "DEBUG: HOME=$HOME"
@@ -285,8 +285,8 @@ install_acme() {
             cd - >/dev/null || true
             rm -rf "$temp_dir"
             
-            # Source bashrc again
-            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
+            # Note: Don't source .bashrc - it would terminate the script
+            # Just search for acme.sh in known paths below.
             
             # Check again in multiple locations
             for acme_path in "$ACME_HOME/acme.sh" "$HOME/.acme.sh/acme.sh" "/root/.acme.sh/acme.sh"; do
