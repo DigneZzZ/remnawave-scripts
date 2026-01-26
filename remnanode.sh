@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.7.3
+# Version: 3.7.4
 set -e
-SCRIPT_VERSION="3.7.3"
+SCRIPT_VERSION="3.7.4"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1943,16 +1943,22 @@ update_command() {
             final_created=$(docker images --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
         fi
         
+        # Получаем версию RemnaNode из контейнера
+        local node_version="N/A"
+        if [ "$was_running" = true ]; then
+            node_version=$(get_remnanode_version 2>/dev/null || echo "N/A")
+        fi
+        
         echo -e "\033[1;37m📋 Update Summary:\033[0m"
-        echo -e "\033[38;5;250m   Previous: \033[38;5;8m${old_image_id:-N/A}\033[0m"
-        echo -e "\033[38;5;250m   Current:  \033[38;5;15m${final_image_id:-N/A}\033[0m"
-        echo -e "\033[38;5;250m   Created:  \033[38;5;15m${final_created:-N/A}\033[0m"
-        echo -e "\033[38;5;250m   Script:   \033[38;5;15mv$current_script_version\033[0m"
+        echo -e "\033[38;5;250m   RemnaNode: \033[38;5;15mv${node_version}\033[0m"
+        echo -e "\033[38;5;250m   Image ID:  \033[38;5;8m${final_image_id:-N/A}\033[0m"
+        echo -e "\033[38;5;250m   Created:   \033[38;5;15m${final_created:-N/A}\033[0m"
+        echo -e "\033[38;5;250m   Script:    \033[38;5;15mv$current_script_version\033[0m"
         
         if [ "$was_running" = true ]; then
-            echo -e "\033[38;5;250m   Status:   \033[1;32mRunning\033[0m"
+            echo -e "\033[38;5;250m   Status:    \033[1;32mRunning\033[0m"
         else
-            echo -e "\033[38;5;250m   Status:   \033[1;33mStopped\033[0m"
+            echo -e "\033[38;5;250m   Status:    \033[1;33mStopped\033[0m"
             echo -e "\033[38;5;8m   Use '\033[38;5;15msudo $APP_NAME up\033[38;5;8m' to start\033[0m"
         fi
         
