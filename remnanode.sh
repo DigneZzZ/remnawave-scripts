@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.6.2
+# Version: 3.7.0
 set -e
-SCRIPT_VERSION="3.6.2"
+SCRIPT_VERSION="3.7.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -90,6 +90,18 @@ ENV_FILE="$APP_DIR/.env"
 XRAY_FILE="$DATA_DIR/xray"
 GEOIP_FILE="$DATA_DIR/geoip.dat"
 GEOSITE_FILE="$DATA_DIR/geosite.dat"
+
+# Default internal ports
+DEFAULT_XTLS_API_PORT=61000
+DEFAULT_INTERNAL_REST_PORT=61001
+DEFAULT_SUPERVISORD_PORT=61002
+
+# Port groups for multi-instance deployments (XTLS_API, INTERNAL_REST, SUPERVISORD)
+# Each group is separated by 10 to allow easy identification
+PORT_GROUP_0="61000,61001,61002"
+PORT_GROUP_1="61010,61011,61012"
+PORT_GROUP_2="61020,61021,61022"
+PORT_GROUP_3="61030,61031,61032"
 
 # Color definitions
 RED='\033[0;31m'
@@ -322,6 +334,58 @@ is_port_occupied() {
     else
         return 1
     fi
+}
+
+# Check if a port group is available (all 3 ports must be free)
+is_port_group_available() {
+    local group_ports="$1"
+    IFS=',' read -r xtls_port rest_port supervisord_port <<< "$group_ports"
+    
+    for port in $xtls_port $rest_port $supervisord_port; do
+        if is_port_occupied "$port"; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Find first available internal port group
+# Returns: group number (0-3) or empty if none available
+find_available_port_group() {
+    # Ensure we have current port information
+    if [ -z "$OCCUPIED_PORTS" ]; then
+        get_occupied_ports
+    fi
+    
+    local groups=("$PORT_GROUP_0" "$PORT_GROUP_1" "$PORT_GROUP_2" "$PORT_GROUP_3")
+    
+    for i in "${!groups[@]}"; do
+        if is_port_group_available "${groups[$i]}"; then
+            echo "$i"
+            return 0
+        fi
+    done
+    
+    # No free group found
+    return 1
+}
+
+# Get port group by index
+get_port_group() {
+    local index="$1"
+    case "$index" in
+        0) echo "$PORT_GROUP_0" ;;
+        1) echo "$PORT_GROUP_1" ;;
+        2) echo "$PORT_GROUP_2" ;;
+        3) echo "$PORT_GROUP_3" ;;
+        *) echo "$PORT_GROUP_0" ;;
+    esac
+}
+
+# Parse port group string into individual ports
+parse_port_group() {
+    local group_ports="$1"
+    IFS=',' read -r XTLS_API_PORT INTERNAL_REST_PORT SUPERVISORD_PORT <<< "$group_ports"
 }
 
 install_latest_xray_core() {
@@ -700,6 +764,108 @@ install_remnanode() {
         fi
     done
 
+    # ============================================
+    # Internal Ports Configuration
+    # ============================================
+    echo
+    colorized_echo cyan "🔧 Internal Ports Configuration"
+    colorized_echo gray "   These ports are used internally by node components (Xray API, REST, Supervisord)."
+    colorized_echo gray "   Default values work fine for single-node installations."
+    echo
+    
+    # Find available port group
+    local suggested_group=$(find_available_port_group)
+    local suggested_group_ports=""
+    
+    if [ -z "$suggested_group" ]; then
+        colorized_echo red "⚠️  All predefined port groups (61000-61032) are occupied!"
+        colorized_echo yellow "   You'll need to enter custom ports manually."
+        # Set defaults anyway, user will customize
+        XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
+        INTERNAL_REST_PORT=$DEFAULT_INTERNAL_REST_PORT
+        SUPERVISORD_PORT=$DEFAULT_SUPERVISORD_PORT
+    else
+        suggested_group_ports=$(get_port_group "$suggested_group")
+        parse_port_group "$suggested_group_ports"
+        
+        if [ "$suggested_group" = "0" ]; then
+            colorized_echo green "✅ Default internal ports (61000-61002) are available."
+        else
+            colorized_echo yellow "⚠️  Default internal ports (61000-61002) are already in use."
+            colorized_echo green "✅ Suggesting alternative group $suggested_group: $XTLS_API_PORT, $INTERNAL_REST_PORT, $SUPERVISORD_PORT"
+        fi
+    fi
+    
+    echo
+    read -p "Do you want to customize internal ports? [y/N]: " -r customize_ports
+    if [[ $customize_ports =~ ^[Yy]$ ]]; then
+        echo
+        colorized_echo blue "Enter internal ports (press Enter to use suggested values):"
+        
+        # XTLS_API_PORT
+        while true; do
+            read -p "  XTLS_API_PORT (default $XTLS_API_PORT): " -r input_port
+            input_port=${input_port:-$XTLS_API_PORT}
+            if validate_port "$input_port"; then
+                if is_port_occupied "$input_port"; then
+                    colorized_echo red "  Port $input_port is already in use."
+                else
+                    XTLS_API_PORT=$input_port
+                    break
+                fi
+            else
+                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
+            fi
+        done
+        
+        # INTERNAL_REST_PORT
+        while true; do
+            read -p "  INTERNAL_REST_PORT (default $INTERNAL_REST_PORT): " -r input_port
+            input_port=${input_port:-$INTERNAL_REST_PORT}
+            if validate_port "$input_port"; then
+                if is_port_occupied "$input_port"; then
+                    colorized_echo red "  Port $input_port is already in use."
+                elif [ "$input_port" = "$XTLS_API_PORT" ]; then
+                    colorized_echo red "  Port $input_port is already used for XTLS_API_PORT."
+                else
+                    INTERNAL_REST_PORT=$input_port
+                    break
+                fi
+            else
+                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
+            fi
+        done
+        
+        # SUPERVISORD_PORT
+        while true; do
+            read -p "  SUPERVISORD_PORT (default $SUPERVISORD_PORT): " -r input_port
+            input_port=${input_port:-$SUPERVISORD_PORT}
+            if validate_port "$input_port"; then
+                if is_port_occupied "$input_port"; then
+                    colorized_echo red "  Port $input_port is already in use."
+                elif [ "$input_port" = "$XTLS_API_PORT" ] || [ "$input_port" = "$INTERNAL_REST_PORT" ]; then
+                    colorized_echo red "  Port $input_port is already used for another internal port."
+                else
+                    SUPERVISORD_PORT=$input_port
+                    break
+                fi
+            else
+                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
+            fi
+        done
+        
+        echo
+        colorized_echo green "✅ Custom internal ports configured:"
+    else
+        echo
+        colorized_echo green "✅ Using internal ports:"
+    fi
+    
+    colorized_echo white "   XTLS_API_PORT:      $XTLS_API_PORT"
+    colorized_echo white "   INTERNAL_REST_PORT: $INTERNAL_REST_PORT"
+    colorized_echo white "   SUPERVISORD_PORT:   $SUPERVISORD_PORT"
+    echo
+
     # Ask about installing Xray-core
     read -p "Do you want to install the latest version of Xray-core? (y/n): " -r install_xray
     INSTALL_XRAY=false
@@ -715,6 +881,11 @@ NODE_PORT=$NODE_PORT
 
 ### XRAY ###
 SECRET_KEY=$SECRET_KEY_VALUE
+
+### Internal (local) ports
+SUPERVISORD_PORT=$SUPERVISORD_PORT
+INTERNAL_REST_PORT=$INTERNAL_REST_PORT
+XTLS_API_PORT=$XTLS_API_PORT
 EOL
     colorized_echo green "Environment file saved in $ENV_FILE"
 
@@ -2729,6 +2900,57 @@ EOL
     fi
 }
 
+# Show ports configuration command
+ports_command() {
+    echo
+    echo -e "\033[1;37m🔌 Ports Configuration\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    
+    if ! is_remnanode_installed; then
+        colorized_echo red "❌ RemnaNode not installed"
+        colorized_echo gray "   Run 'sudo $APP_NAME install' first"
+        exit 1
+    fi
+    
+    # External port
+    echo
+    echo -e "\033[1;37m🌐 External Port:\033[0m"
+    local node_port=$(get_env_variable "NODE_PORT")
+    if [ -z "$node_port" ]; then
+        node_port=$(get_env_variable "APP_PORT")
+    fi
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "NODE_PORT:" "${node_port:-3000 (default)}"
+    
+    # Internal ports
+    echo
+    echo -e "\033[1;37m🔧 Internal Ports:\033[0m"
+    
+    local xtls_port=$(get_env_variable "XTLS_API_PORT")
+    local rest_port=$(get_env_variable "INTERNAL_REST_PORT")
+    local supervisord_port=$(get_env_variable "SUPERVISORD_PORT")
+    
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "XTLS_API_PORT:" "${xtls_port:-$DEFAULT_XTLS_API_PORT (default)}"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "INTERNAL_REST_PORT:" "${rest_port:-$DEFAULT_INTERNAL_REST_PORT (default)}"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "SUPERVISORD_PORT:" "${supervisord_port:-$DEFAULT_SUPERVISORD_PORT (default)}"
+    
+    # Check if internal ports are explicitly set
+    if [ -z "$xtls_port" ] && [ -z "$rest_port" ] && [ -z "$supervisord_port" ]; then
+        echo
+        colorized_echo gray "   ℹ️  Internal ports not explicitly set in .env"
+        colorized_echo gray "   Container will use default values (61000-61002)"
+    fi
+    
+    # Show connection info
+    echo
+    echo -e "\033[1;37m📋 Connection Info:\033[0m"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;117m%s:%s\033[0m\n" "Node Address:" "$NODE_IP" "${node_port:-3000}"
+    
+    echo
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    colorized_echo gray "💡 To modify ports, use: $APP_NAME edit-env"
+    echo
+}
+
 
 usage() {
     clear
@@ -2766,7 +2988,8 @@ usage() {
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "migrate" "🔄 Migrate environment variables"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "edit" "📝 Edit docker-compose.yml"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "edit-env" "🔐 Edit environment (.env)"
-    printf "   \033[38;5;178m%-18s\033[0m %s\n" "enable-socket" "🔌 Enable selfsteal socket access"
+    printf "   \033[38;5;178m%-18s\033[0m %s\n" "ports" "🔌 Show ports configuration"
+    printf "   \033[38;5;178m%-18s\033[0m %s\n" "enable-socket" "🔗 Enable selfsteal socket access"
     echo
 
     echo -e "\033[1;37m📋 Information:\033[0m"
@@ -2935,7 +3158,8 @@ main_menu() {
         echo -e "   \033[38;5;15m12)\033[0m 🔄 Migrate environment variables"
         echo -e "   \033[38;5;15m13)\033[0m 📝 Edit docker-compose.yml"
         echo -e "   \033[38;5;15m14)\033[0m 🔐 Edit environment (.env)"
-        echo -e "   \033[38;5;15m15)\033[0m 🗂️  Setup log rotation"
+        echo -e "   \033[38;5;15m15)\033[0m � Show ports configuration"
+        echo -e "   \033[38;5;15m16)\033[0m �🗂️  Setup log rotation"
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
         echo -e "\033[38;5;15m   0)\033[0m 🚪 Exit to terminal"
@@ -2960,7 +3184,7 @@ main_menu() {
         
         echo -e "\033[38;5;8mRemnaNode CLI v$SCRIPT_VERSION by DigneZzZ • gig.ovh\033[0m"
         echo
-        read -p "$(echo -e "\033[1;37mSelect option [0-15]:\033[0m ")" choice
+        read -p "$(echo -e "\033[1;37mSelect option [0-16]:\033[0m ")" choice
 
         case "$choice" in
             1) install_command; read -p "Press Enter to continue..." ;;
@@ -2977,7 +3201,8 @@ main_menu() {
             12) migrate_env_variables; read -p "Press Enter to continue..." ;;
             13) edit_command; read -p "Press Enter to continue..." ;;
             14) edit_env_command; read -p "Press Enter to continue..." ;;
-            15) setup_log_rotation; read -p "Press Enter to continue..." ;;
+            15) ports_command; read -p "Press Enter to continue..." ;;
+            16) setup_log_rotation; read -p "Press Enter to continue..." ;;
             0) clear; exit 0 ;;
             *) 
                 echo -e "\033[1;31m❌ Invalid option!\033[0m"
@@ -3005,6 +3230,7 @@ case "${COMMAND:-menu}" in
     migrate) migrate_env_variables ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
+    ports) ports_command ;;
     setup-logs) setup_log_rotation ;;
     enable-socket) enable_socket_command ;;
     help|--help|-h) usage ;;
