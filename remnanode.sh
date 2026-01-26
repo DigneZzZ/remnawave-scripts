@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.7.0
+# Version: 3.7.2
 set -e
-SCRIPT_VERSION="3.7.0"
+SCRIPT_VERSION="3.7.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1803,10 +1803,11 @@ update_command() {
     echo -e "\033[38;5;250m📝 Step 2:\033[0m Checking local image version..."
     local local_image_id=""
     local local_created=""
+    local image_name="ghcr.io/remnawave/node"
     
-    if docker images remnawave/node:$current_tag --format "table {{.ID}}\t{{.CreatedAt}}" | grep -v "IMAGE ID" > /dev/null 2>&1; then
-        local_image_id=$(docker images remnawave/node:$current_tag --format "{{.ID}}" | head -1)
-        local_created=$(docker images remnawave/node:$current_tag --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
+    if docker images ${image_name}:$current_tag --format "table {{.ID}}\t{{.CreatedAt}}" | grep -v "IMAGE ID" > /dev/null 2>&1; then
+        local_image_id=$(docker images ${image_name}:$current_tag --format "{{.ID}}" | head -1)
+        local_created=$(docker images ${image_name}:$current_tag --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
         
         echo -e "\033[1;32m✅ Local image found\033[0m"
         echo -e "\033[38;5;8m   Image ID: $local_image_id\033[0m"
@@ -1825,7 +1826,7 @@ update_command() {
     # Запускаем docker pull
     if $COMPOSE -f $COMPOSE_FILE pull --quiet 2>/dev/null; then
         # Проверяем, изменился ли ID образа после pull
-        local new_image_id=$(docker images remnawave/node:$current_tag --format "{{.ID}}" | head -1)
+        local new_image_id=$(docker images ${image_name}:$current_tag --format "{{.ID}}" | head -1)
         
         local needs_update=false
         local update_reason=""
@@ -1899,7 +1900,7 @@ update_command() {
             if update_remnanode; then
                 echo -e "\033[1;32m✅ Image updated\033[0m"
                 # Обновляем ID образа
-                new_image_id=$(docker images remnawave/node:$current_tag --format "{{.ID}}" | head -1)
+                new_image_id=$(docker images ${image_name}:$current_tag --format "{{.ID}}" | head -1)
             else
                 echo -e "\033[1;31m❌ Failed to pull image\033[0m"
                 
@@ -1933,7 +1934,7 @@ update_command() {
         echo -e "\033[1;37m🎉 RemnaNode updated successfully!\033[0m"
         
         # Получаем новую информацию об образе
-        local final_created=$(docker images remnawave/node:$current_tag --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
+        local final_created=$(docker images ${image_name}:$current_tag --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
         
         echo -e "\033[1;37m📋 Update Summary:\033[0m"
         echo -e "\033[38;5;250m   Previous: \033[38;5;8m$old_image_id\033[0m"
@@ -2805,34 +2806,61 @@ check_editor() {
 }
 
 xray_log_out() {
-        if ! is_remnanode_installed; then
-            colorized_echo red "RemnaNode not installed!"
-            exit 1
-        fi
+    if ! is_remnanode_installed; then
+        colorized_echo red "RemnaNode not installed!"
+        exit 1
+    fi
     detect_compose
 
-        if ! is_remnanode_up; then
-            colorized_echo red "RemnaNode is not running. Start it first with 'remnanode up'"
-            exit 1
-        fi
+    if ! is_remnanode_up; then
+        colorized_echo red "RemnaNode is not running. Start it first with 'remnanode up'"
+        exit 1
+    fi
 
-    docker exec -it $APP_NAME tail -n +1 -f /var/log/supervisor/xray.out.log
+    # Check if log file exists
+    if ! docker exec $APP_NAME test -f /var/log/supervisor/xray.out.log 2>/dev/null; then
+        colorized_echo yellow "⚠️  Xray output log file not found yet."
+        colorized_echo gray "   The log file will be created when Xray generates output."
+        colorized_echo gray "   Try again later or check container logs: $APP_NAME logs"
+        return 0
+    fi
+
+    colorized_echo blue "📤 Following Xray output logs (Ctrl+C to exit)..."
+    echo
+    docker exec -it $APP_NAME tail -n 100 -f /var/log/supervisor/xray.out.log
 }
 
 xray_log_err() {
-        if ! is_remnanode_installed; then
-            colorized_echo red "RemnaNode not installed!"
-            exit 1
-        fi
+    if ! is_remnanode_installed; then
+        colorized_echo red "RemnaNode not installed!"
+        exit 1
+    fi
     
-     detect_compose
+    detect_compose
  
-        if ! is_remnanode_up; then
-            colorized_echo red "RemnaNode is not running. Start it first with 'remnanode up'"
-            exit 1
-        fi
+    if ! is_remnanode_up; then
+        colorized_echo red "RemnaNode is not running. Start it first with 'remnanode up'"
+        exit 1
+    fi
 
-    docker exec -it $APP_NAME tail -n +1 -f /var/log/supervisor/xray.err.log
+    # Check if log file exists
+    if ! docker exec $APP_NAME test -f /var/log/supervisor/xray.err.log 2>/dev/null; then
+        colorized_echo yellow "⚠️  Xray error log file not found yet."
+        colorized_echo gray "   The log file will be created when Xray generates errors."
+        colorized_echo green "   ✅ No errors is good news!"
+        return 0
+    fi
+
+    # Check if log file is empty
+    local log_size=$(docker exec $APP_NAME stat -c%s /var/log/supervisor/xray.err.log 2>/dev/null || echo "0")
+    if [ "$log_size" = "0" ]; then
+        colorized_echo green "✅ Xray error log is empty - no errors recorded!"
+        return 0
+    fi
+
+    colorized_echo blue "📥 Following Xray error logs (Ctrl+C to exit)..."
+    echo
+    docker exec -it $APP_NAME tail -n 100 -f /var/log/supervisor/xray.err.log
 }
 
 edit_command() {
