@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.7.2
+# Version: 3.7.3
 set -e
-SCRIPT_VERSION="3.7.2"
+SCRIPT_VERSION="3.7.3"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1933,13 +1933,20 @@ update_command() {
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
         echo -e "\033[1;37m🎉 RemnaNode updated successfully!\033[0m"
         
-        # Получаем новую информацию об образе
+        # Получаем актуальную информацию об образе
+        local final_image_id=$(docker images ${image_name}:$current_tag --format "{{.ID}}" | head -1)
         local final_created=$(docker images ${image_name}:$current_tag --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
         
+        # Fallback если не нашли по полному имени
+        if [ -z "$final_image_id" ]; then
+            final_image_id=$(docker images --format "{{.ID}}" | head -1)
+            final_created=$(docker images --format "{{.CreatedAt}}" | head -1 | cut -d' ' -f1,2)
+        fi
+        
         echo -e "\033[1;37m📋 Update Summary:\033[0m"
-        echo -e "\033[38;5;250m   Previous: \033[38;5;8m$old_image_id\033[0m"
-        echo -e "\033[38;5;250m   Current:  \033[38;5;15m$new_image_id\033[0m"
-        echo -e "\033[38;5;250m   Created:  \033[38;5;15m$final_created\033[0m"
+        echo -e "\033[38;5;250m   Previous: \033[38;5;8m${old_image_id:-N/A}\033[0m"
+        echo -e "\033[38;5;250m   Current:  \033[38;5;15m${final_image_id:-N/A}\033[0m"
+        echo -e "\033[38;5;250m   Created:  \033[38;5;15m${final_created:-N/A}\033[0m"
         echo -e "\033[38;5;250m   Script:   \033[38;5;15mv$current_script_version\033[0m"
         
         if [ "$was_running" = true ]; then
