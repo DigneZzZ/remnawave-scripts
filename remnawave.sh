@@ -9055,7 +9055,7 @@ METRICS_PORT=$METRICS_PORT
 ### API ###
 # Possible values: max (start instances on all cores), number (start instances on number of cores), -1 (start instances on all cores - 1)
 # !!! Do not set this value more than physical cores count in your machine !!!
-# Review documentation: https://remna.st/docs/install/environment-variables#scaling-api
+# Review documentation: https://docs.rw/docs/install/environment-variables#scaling-api
 API_INSTANCES=1
 
 ### DATABASE ###
@@ -9093,7 +9093,7 @@ FRONT_END_DOMAIN=$FRONT_END_DOMAIN
 ### SUBSCRIPTION PUBLIC DOMAIN ###
 ### DOMAIN, WITHOUT HTTP/HTTPS, DO NOT ADD / AT THE END ###
 ### Used in "profile-web-page-url" response header and in UI/API ###
-### Review documentation: https://remna.st/docs/install/environment-variables#domains
+### Review documentation: https://docs.rw/docs/install/environment-variables#domains
 SUB_PUBLIC_DOMAIN=$SUB_PUBLIC_DOMAIN
 
 ### If CUSTOM_SUB_PREFIX is set in @remnawave/subscription-page, append the same path to SUB_PUBLIC_DOMAIN. Example: SUB_PUBLIC_DOMAIN=sub-page.example.com/sub
