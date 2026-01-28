@@ -9239,8 +9239,8 @@ services:
         ports:
             - '127.0.0.1:${SUB_PAGE_PORT}:\${APP_PORT:-3010}'
         depends_on:
-            - remnawave
-
+            remnawave:
+                condition: service_healthy
 
     remnawave-redis:
         image: valkey/valkey:8.1-alpine
