@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.0.0
+# Version: 4.1.0
 set -e
-SCRIPT_VERSION="4.0.0"
+SCRIPT_VERSION="4.1.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -17,10 +17,112 @@ fi
 
 SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/remnanode.sh"
 
+# ============================================
+# Force mode variables (for non-interactive installation)
+# --force skips ALL prompts EXCEPT secret-key input
+# ============================================
+FORCE_MODE="false"
+FORCE_SECRET_KEY=""       # If empty in force mode → will ask interactively
+FORCE_NODE_PORT=""        # If empty in force mode → uses default 3000
+FORCE_XTLS_PORT=""        # If empty in force mode → uses default 61000
+FORCE_INSTALL_XRAY=""     # If empty in force mode → skip xray installation
+
 while [[ $# -gt 0 ]]; do
     key="$1"
     
     case $key in
+        --force|-f)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_MODE="true"
+            else
+                echo "Error: --force parameter is only allowed with 'install' command."
+                exit 1
+            fi
+            shift
+        ;;
+        --secret-key|--secret|--key)
+            if [[ "$COMMAND" == "install" ]]; then
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    FORCE_SECRET_KEY="$2"
+                    shift 2
+                else
+                    # Try to extract value from --secret-key=VALUE format
+                    if [[ "$1" =~ ^--[^=]+=(.+)$ ]]; then
+                        FORCE_SECRET_KEY="${BASH_REMATCH[1]}"
+                        shift
+                    else
+                        echo "Error: --secret-key requires a value."
+                        exit 1
+                    fi
+                fi
+            else
+                echo "Error: --secret-key parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --secret-key=*|--secret=*|--key=*)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_SECRET_KEY="${1#*=}"
+                shift
+            else
+                echo "Error: --secret-key parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --port)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_NODE_PORT="$2"
+                shift 2
+            else
+                echo "Error: --port parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --port=*)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_NODE_PORT="${1#*=}"
+                shift
+            else
+                echo "Error: --port parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --xtls-port)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_XTLS_PORT="$2"
+                shift 2
+            else
+                echo "Error: --xtls-port parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --xtls-port=*)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_XTLS_PORT="${1#*=}"
+                shift
+            else
+                echo "Error: --xtls-port parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --xray)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_INSTALL_XRAY="true"
+            else
+                echo "Error: --xray parameter is only allowed with 'install' command."
+                exit 1
+            fi
+            shift
+        ;;
+        --no-xray)
+            if [[ "$COMMAND" == "install" ]]; then
+                FORCE_INSTALL_XRAY="false"
+            else
+                echo "Error: --no-xray parameter is only allowed with 'install' command."
+                exit 1
+            fi
+            shift
+        ;;
         --name)
             if [[ "$COMMAND" == "install" || "$COMMAND" == "install-script" ]]; then
                 APP_NAME="$2"
@@ -686,78 +788,116 @@ install_remnanode() {
     colorized_echo blue "Creating directory $DATA_DIR"
     mkdir -p "$DATA_DIR"
 
-    # Prompt the user to input the SSL certificate
-    colorized_echo blue "Please paste the content of the SECRET_KEY from Remnawave-Panel, press ENTER on a new line when finished: "
-    SECRET_KEY_VALUE=""
-    while IFS= read -r line; do
-        if [[ -z $line ]]; then
-            break
-        fi
-        SECRET_KEY_VALUE="$SECRET_KEY_VALUE$line"
-    done
-
-    get_occupied_ports
-    while true; do
-        read -p "Enter the NODE_PORT (default 3000): " -r NODE_PORT
-        NODE_PORT=${NODE_PORT:-3000}
-        
-        if validate_port "$NODE_PORT"; then
-            if is_port_occupied "$NODE_PORT"; then
-                colorized_echo red "Port $NODE_PORT is already in use. Please enter another port."
-                colorized_echo blue "Occupied ports: $(echo $OCCUPIED_PORTS | tr '\n' ' ')"
-            else
+    # Get SECRET_KEY (from command line or interactive input)
+    if [ -n "$FORCE_SECRET_KEY" ]; then
+        SECRET_KEY_VALUE="$FORCE_SECRET_KEY"
+        colorized_echo green "✅ Using SECRET_KEY from command line"
+    else
+        colorized_echo blue "Please paste the content of the SECRET_KEY from Remnawave-Panel, press ENTER on a new line when finished: "
+        SECRET_KEY_VALUE=""
+        while IFS= read -r line; do
+            if [[ -z $line ]]; then
                 break
             fi
-        else
-            colorized_echo red "Invalid port. Please enter a port between 1 and 65535."
+            SECRET_KEY_VALUE="$SECRET_KEY_VALUE$line"
+        done
+    fi
+
+    # Validate SECRET_KEY
+    if [ -z "$SECRET_KEY_VALUE" ]; then
+        colorized_echo red "❌ SECRET_KEY is required!"
+        exit 1
+    fi
+
+    get_occupied_ports
+    
+    # Get NODE_PORT (from command line or interactive input)
+    if [ -n "$FORCE_NODE_PORT" ]; then
+        NODE_PORT="$FORCE_NODE_PORT"
+        if ! validate_port "$NODE_PORT"; then
+            colorized_echo red "❌ Invalid NODE_PORT: $NODE_PORT"
+            exit 1
         fi
-    done
+        if is_port_occupied "$NODE_PORT"; then
+            colorized_echo red "❌ NODE_PORT $NODE_PORT is already in use!"
+            exit 1
+        fi
+        colorized_echo green "✅ Using NODE_PORT: $NODE_PORT"
+    elif [ "$FORCE_MODE" == "true" ]; then
+        # Force mode without explicit port: use default 3000
+        NODE_PORT=3000
+        if is_port_occupied "$NODE_PORT"; then
+            colorized_echo red "❌ Default NODE_PORT $NODE_PORT is already in use!"
+            colorized_echo yellow "   Use --port=PORT to specify a different port"
+            exit 1
+        fi
+        colorized_echo green "✅ Using default NODE_PORT: $NODE_PORT"
+    else
+        while true; do
+            read -p "Enter the NODE_PORT (default 3000): " -r NODE_PORT
+            NODE_PORT=${NODE_PORT:-3000}
+            
+            if validate_port "$NODE_PORT"; then
+                if is_port_occupied "$NODE_PORT"; then
+                    colorized_echo red "Port $NODE_PORT is already in use. Please enter another port."
+                    colorized_echo blue "Occupied ports: $(echo $OCCUPIED_PORTS | tr '\n' ' ')"
+                else
+                    break
+                fi
+            else
+                colorized_echo red "Invalid port. Please enter a port between 1 and 65535."
+            fi
+        done
+    fi
 
     # ============================================
     # Internal Ports Configuration (simplified in v4.0.0)
     # Since remnawave/node v2.5.0, only XTLS_API_PORT is configurable
     # Other internal ports now use unix sockets
     # ============================================
-    echo
-    colorized_echo cyan "🔧 Internal Ports Configuration"
-    colorized_echo gray "   Only XTLS_API_PORT is configurable (for Xray gRPC API)."
-    colorized_echo gray "   Other internal ports now use unix sockets automatically."
-    echo
     
-    # Set default XTLS_API_PORT
-    XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
-    
-    # Check if default port is available
-    if is_port_occupied "$XTLS_API_PORT"; then
-        colorized_echo yellow "⚠️  Default XTLS_API_PORT ($XTLS_API_PORT) is already in use."
-        colorized_echo blue "   You'll need to enter a custom port."
-        
-        while true; do
-            read -p "  Enter XTLS_API_PORT: " -r input_port
-            if [ -z "$input_port" ]; then
-                colorized_echo red "  Port is required."
-                continue
-            fi
-            if validate_port "$input_port"; then
-                if is_port_occupied "$input_port"; then
-                    colorized_echo red "  Port $input_port is already in use."
-                else
-                    XTLS_API_PORT=$input_port
-                    break
-                fi
-            else
-                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
-            fi
-        done
+    # Get XTLS_API_PORT (from command line, force mode defaults, or interactive)
+    if [ -n "$FORCE_XTLS_PORT" ]; then
+        XTLS_API_PORT="$FORCE_XTLS_PORT"
+        if ! validate_port "$XTLS_API_PORT"; then
+            colorized_echo red "❌ Invalid XTLS_API_PORT: $XTLS_API_PORT"
+            exit 1
+        fi
+        if is_port_occupied "$XTLS_API_PORT"; then
+            colorized_echo red "❌ XTLS_API_PORT $XTLS_API_PORT is already in use!"
+            exit 1
+        fi
+        colorized_echo green "✅ Using XTLS_API_PORT: $XTLS_API_PORT"
+    elif [ "$FORCE_MODE" == "true" ]; then
+        # Force mode without explicit port: use default
+        XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
+        if is_port_occupied "$XTLS_API_PORT"; then
+            colorized_echo red "❌ Default XTLS_API_PORT $XTLS_API_PORT is already in use!"
+            colorized_echo yellow "   Use --xtls-port=PORT to specify a different port"
+            exit 1
+        fi
+        colorized_echo green "✅ Using default XTLS_API_PORT: $XTLS_API_PORT"
     else
-        colorized_echo green "✅ Default XTLS_API_PORT ($XTLS_API_PORT) is available."
-        
         echo
-        read -p "Do you want to customize XTLS_API_PORT? [y/N]: " -r customize_ports
-        if [[ $customize_ports =~ ^[Yy]$ ]]; then
+        colorized_echo cyan "🔧 Internal Ports Configuration"
+        colorized_echo gray "   Only XTLS_API_PORT is configurable (for Xray gRPC API)."
+        colorized_echo gray "   Other internal ports now use unix sockets automatically."
+        echo
+        
+        # Set default XTLS_API_PORT
+        XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
+        
+        # Check if default port is available
+        if is_port_occupied "$XTLS_API_PORT"; then
+            colorized_echo yellow "⚠️  Default XTLS_API_PORT ($XTLS_API_PORT) is already in use."
+            colorized_echo blue "   You'll need to enter a custom port."
+            
             while true; do
-                read -p "  XTLS_API_PORT (default $XTLS_API_PORT): " -r input_port
-                input_port=${input_port:-$XTLS_API_PORT}
+                read -p "  Enter XTLS_API_PORT: " -r input_port
+                if [ -z "$input_port" ]; then
+                    colorized_echo red "  Port is required."
+                    continue
+                fi
                 if validate_port "$input_port"; then
                     if is_port_occupied "$input_port"; then
                         colorized_echo red "  Port $input_port is already in use."
@@ -769,19 +909,50 @@ install_remnanode() {
                     colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
                 fi
             done
+        else
+            colorized_echo green "✅ Default XTLS_API_PORT ($XTLS_API_PORT) is available."
+            
+            echo
+            read -p "Do you want to customize XTLS_API_PORT? [y/N]: " -r customize_ports
+            if [[ $customize_ports =~ ^[Yy]$ ]]; then
+                while true; do
+                    read -p "  XTLS_API_PORT (default $XTLS_API_PORT): " -r input_port
+                    input_port=${input_port:-$XTLS_API_PORT}
+                    if validate_port "$input_port"; then
+                        if is_port_occupied "$input_port"; then
+                            colorized_echo red "  Port $input_port is already in use."
+                        else
+                            XTLS_API_PORT=$input_port
+                            break
+                        fi
+                    else
+                        colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
+                    fi
+                done
+            fi
         fi
+        
+        echo
+        colorized_echo green "✅ Using XTLS_API_PORT: $XTLS_API_PORT"
     fi
-    
-    echo
-    colorized_echo green "✅ Using XTLS_API_PORT: $XTLS_API_PORT"
     echo
 
     # Ask about installing Xray-core
-    read -p "Do you want to install the latest version of Xray-core? (y/n): " -r install_xray
     INSTALL_XRAY=false
-    if [[ "$install_xray" =~ ^[Yy]$ ]]; then
+    if [ "$FORCE_INSTALL_XRAY" == "true" ]; then
+        colorized_echo green "✅ Installing Xray-core (--xray flag)"
         INSTALL_XRAY=true
         install_latest_xray_core
+    elif [ "$FORCE_INSTALL_XRAY" == "false" ] || [ "$FORCE_MODE" == "true" ]; then
+        # Force mode defaults to NOT installing Xray-core
+        colorized_echo gray "ℹ️  Skipping Xray-core installation (use --xray to install)"
+        INSTALL_XRAY=false
+    else
+        read -p "Do you want to install the latest version of Xray-core? (y/n): " -r install_xray
+        if [[ "$install_xray" =~ ^[Yy]$ ]]; then
+            INSTALL_XRAY=true
+            install_latest_xray_core
+        fi
     fi
 
     colorized_echo blue "Generating .env file"
@@ -1020,10 +1191,14 @@ install_command() {
     check_running_as_root
     if is_remnanode_installed; then
         colorized_echo red "Remnanode is already installed at $APP_DIR"
-        read -p "Do you want to override the previous installation? (y/n) "
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            colorized_echo red "Aborted installation"
-            exit 1
+        if [ "$FORCE_MODE" == "true" ]; then
+            colorized_echo yellow "⚠️  Force mode: overriding existing installation"
+        else
+            read -p "Do you want to override the previous installation? (y/n) "
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                colorized_echo red "Aborted installation"
+                exit 1
+            fi
         fi
     fi
     detect_os
@@ -3029,6 +3204,17 @@ usage() {
     printf "   \033[38;5;15m%-18s\033[0m %s\n" "uninstall" "🗑️  Remove RemnaNode completely"
     echo
 
+    echo -e "\033[1;37m🎯 Install Options:\033[0m"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--force, -f" "Non-interactive mode (skip confirmations)"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--secret-key=KEY" "Set SECRET_KEY from panel"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--port=PORT" "Set NODE_PORT (default: 3000)"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--xtls-port=PORT" "Set XTLS_API_PORT (default: 61000)"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--xray" "Install latest Xray-core"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--no-xray" "Skip Xray-core (default in force mode)"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--name NAME" "Custom installation name"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--dev" "Use development image"
+    echo
+
     echo -e "\033[1;37m⚙️  Service Control:\033[0m"
     printf "   \033[38;5;250m%-18s\033[0m %s\n" "up" "▶️  Start services"
     printf "   \033[38;5;250m%-18s\033[0m %s\n" "down" "⏹️  Stop services"
@@ -3074,12 +3260,15 @@ usage() {
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
     echo -e "\033[1;37m📖 Examples:\033[0m"
     echo -e "\033[38;5;244m   sudo $APP_NAME install\033[0m"
+    echo -e "\033[38;5;244m   sudo $APP_NAME install --force --secret-key=\"eyJ...\"\033[0m"
+    echo -e "\033[38;5;244m   sudo $APP_NAME install -f --secret-key=\"KEY\" --port=3001 --xray\033[0m"
     echo -e "\033[38;5;244m   sudo $APP_NAME core-update\033[0m"
     echo -e "\033[38;5;244m   $APP_NAME logs\033[0m"
     echo -e "\033[38;5;244m   $APP_NAME menu           # Interactive menu\033[0m"
     echo -e "\033[38;5;244m   $APP_NAME                # Same as menu\033[0m"
     echo
-    echo -e "\033[38;5;8mUse '\033[38;5;15m$APP_NAME <command> --help\033[38;5;8m' for detailed command help\033[0m"
+    echo -e "\033[1;37m📡 One-liner Force Install:\033[0m"
+    echo -e "\033[38;5;117m   bash <(curl -Ls URL) @ install --force --secret-key=\"KEY\"\033[0m"
     echo
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
     echo -e "\033[38;5;8m📚 Project: \033[38;5;250mhttps://gig.ovh\033[0m"

@@ -493,15 +493,48 @@ Production-готовый Bash-скрипт для установки и упр�
 ### 📦 Быстрый старт
 
 ```bash
-# Установка RemnaNode
+# Установка RemnaNode (интерактивный режим)
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
 
 # Установка с пользовательским именем
-sudo remnanode.sh install --name node-prod
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install --name node-prod
 
 # Установка версии для разработки
-sudo remnanode.sh install --dev --name node-dev
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install --dev --name node-dev
 ```
+
+**🚀 Force режим (неинтерактивная установка):**
+
+```bash
+# Полностью автоматическая установка с SECRET_KEY
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="eyJhbGciOiJIUzI1NiJ9..."
+
+# Force установка с кастомным портом и Xray-core
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="KEY" --port=3001 --xray
+
+# Force установка со всеми опциями
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="KEY" --port=3000 --xtls-port=61000 --xray --name mynode --dev
+```
+
+---
+
+### 🎯 Опции установки
+
+| Флаг | Описание | По умолчанию |
+|------|----------|---------------|
+| `--force`, `-f` | Неинтерактивный режим (пропуск всех подтверждений) | - |
+| `--secret-key=KEY` | SECRET_KEY из Remnawave Panel (обязателен в force режиме) | - |
+| `--port=PORT` | NODE_PORT для внешних подключений | `3000` |
+| `--xtls-port=PORT` | XTLS_API_PORT для Xray gRPC API | `61000` |
+| `--xray` | Установить последнюю версию Xray-core | - |
+| `--no-xray` | Пропустить установку Xray-core (по умолчанию в force режиме) | - |
+| `--name NAME` | Пользовательское имя директории установки | `remnanode` |
+| `--dev` | Использовать Docker образ для разработки | - |
+
+> ⚠️ **Важно:** В force режиме (`--force`) Xray-core **НЕ** устанавливается по умолчанию. Используйте флаг `--xray` для его установки.
 
 ---
 
@@ -509,7 +542,7 @@ sudo remnanode.sh install --dev --name node-dev
 
 | Команда | Описание | Использование |
 |---------|----------|---------------|
-| `install` | Установить RemnaNode | `remnanode install [--dev] [--name NAME]` |
+| `install` | Установить RemnaNode | `remnanode install [--force] [--secret-key=KEY] [--port=PORT] [--xray]` |
 | `update` | Обновить скрипт и контейнер | `remnanode update` |
 | `uninstall` | Удалить узел и данные | `remnanode uninstall` |
 | `up` | Запустить сервисы узла | `remnanode up` |

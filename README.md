@@ -493,7 +493,7 @@ A production-ready Bash script to install and manage **RemnaNode** - high-perfor
 ### 📦 Quick Start
 
 ```bash
-# Install RemnaNode
+# Install RemnaNode (interactive)
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
 
 # Install with custom name
@@ -503,13 +503,46 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install --dev --name node-dev
 ```
 
+**🚀 Force Mode (Non-interactive Installation):**
+
+```bash
+# Fully automated installation with SECRET_KEY
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="eyJhbGciOiJIUzI1NiJ9..."
+
+# Force install with custom port and Xray-core
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="KEY" --port=3001 --xray
+
+# Force install with all options
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
+    --force --secret-key="KEY" --port=3000 --xtls-port=61000 --xray --name mynode --dev
+```
+
+---
+
+### 🎯 Installation Options
+
+| Flag | Description | Default |
+|------|-------------|--------|
+| `--force`, `-f` | Non-interactive mode (skip all confirmations) | - |
+| `--secret-key=KEY` | SECRET_KEY from Remnawave Panel (required in force mode) | - |
+| `--port=PORT` | NODE_PORT for external connections | `3000` |
+| `--xtls-port=PORT` | XTLS_API_PORT for Xray gRPC API | `61000` |
+| `--xray` | Install latest Xray-core | - |
+| `--no-xray` | Skip Xray-core installation (default in force mode) | - |
+| `--name NAME` | Custom installation directory name | `remnanode` |
+| `--dev` | Use development Docker image | - |
+
+> ⚠️ **Note:** In force mode (`--force`), Xray-core is **NOT** installed by default. Use `--xray` flag to install it.
+
 ---
 
 ### 🛠 Management Commands
 
 | Command          | Description                   | Usage                                                   |
 |------------------|-------------------------------|---------------------------------------------------------|
-| `install`        | Install RemnaNode             | `remnanode install [--dev] [--name NAME]`               |
+| `install`        | Install RemnaNode             | `remnanode install [--force] [--secret-key=KEY] [--port=PORT] [--xray]` |
 | `install-script` | Install RemnaNode bash script | `remnanode install-script [--name NAME] [--source URL]` |
 | `update`         | Update script and container   | `remnanode update`                                      |
 | `uninstall`      | Remove node and data          | `remnanode uninstall`                                   |
