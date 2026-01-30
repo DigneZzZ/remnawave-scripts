@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 3.7.4
+# Version: 4.0.0
 set -e
-SCRIPT_VERSION="3.7.4"
+SCRIPT_VERSION="4.0.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -91,17 +91,12 @@ XRAY_FILE="$DATA_DIR/xray"
 GEOIP_FILE="$DATA_DIR/geoip.dat"
 GEOSITE_FILE="$DATA_DIR/geosite.dat"
 
-# Default internal ports
+# Default internal port (XTLS_API only, other internal ports now use unix sockets)
 DEFAULT_XTLS_API_PORT=61000
-DEFAULT_INTERNAL_REST_PORT=61001
-DEFAULT_SUPERVISORD_PORT=61002
 
-# Port groups for multi-instance deployments (XTLS_API, INTERNAL_REST, SUPERVISORD)
-# Each group is separated by 10 to allow easy identification
-PORT_GROUP_0="61000,61001,61002"
-PORT_GROUP_1="61010,61011,61012"
-PORT_GROUP_2="61020,61021,61022"
-PORT_GROUP_3="61030,61031,61032"
+# Deprecated ports (removed in v2.5.0+ of remnawave/node)
+# SUPERVISORD_PORT and INTERNAL_REST_PORT are no longer needed
+# They now use unix sockets: /run/supervisord.sock and /run/remnawave-internal.sock
 
 # Color definitions
 RED='\033[0;31m'
@@ -336,57 +331,11 @@ is_port_occupied() {
     fi
 }
 
-# Check if a port group is available (all 3 ports must be free)
-is_port_group_available() {
-    local group_ports="$1"
-    IFS=',' read -r xtls_port rest_port supervisord_port <<< "$group_ports"
-    
-    for port in $xtls_port $rest_port $supervisord_port; do
-        if is_port_occupied "$port"; then
-            return 1
-        fi
-    done
-    return 0
-}
-
-# Find first available internal port group
-# Returns: group number (0-3) or empty if none available
-find_available_port_group() {
-    # Ensure we have current port information
-    if [ -z "$OCCUPIED_PORTS" ]; then
-        get_occupied_ports
-    fi
-    
-    local groups=("$PORT_GROUP_0" "$PORT_GROUP_1" "$PORT_GROUP_2" "$PORT_GROUP_3")
-    
-    for i in "${!groups[@]}"; do
-        if is_port_group_available "${groups[$i]}"; then
-            echo "$i"
-            return 0
-        fi
-    done
-    
-    # No free group found
-    return 1
-}
-
-# Get port group by index
-get_port_group() {
-    local index="$1"
-    case "$index" in
-        0) echo "$PORT_GROUP_0" ;;
-        1) echo "$PORT_GROUP_1" ;;
-        2) echo "$PORT_GROUP_2" ;;
-        3) echo "$PORT_GROUP_3" ;;
-        *) echo "$PORT_GROUP_0" ;;
-    esac
-}
-
-# Parse port group string into individual ports
-parse_port_group() {
-    local group_ports="$1"
-    IFS=',' read -r XTLS_API_PORT INTERNAL_REST_PORT SUPERVISORD_PORT <<< "$group_ports"
-}
+# ============================================
+# DEPRECATED: Port group functions removed in v4.0.0
+# Node v2.5.0+ uses unix sockets for internal communication
+# Only XTLS_API_PORT is still configurable
+# ============================================
 
 install_latest_xray_core() {
     identify_the_operating_system_and_architecture
@@ -765,47 +714,30 @@ install_remnanode() {
     done
 
     # ============================================
-    # Internal Ports Configuration
+    # Internal Ports Configuration (simplified in v4.0.0)
+    # Since remnawave/node v2.5.0, only XTLS_API_PORT is configurable
+    # Other internal ports now use unix sockets
     # ============================================
     echo
     colorized_echo cyan "🔧 Internal Ports Configuration"
-    colorized_echo gray "   These ports are used internally by node components (Xray API, REST, Supervisord)."
-    colorized_echo gray "   Default values work fine for single-node installations."
+    colorized_echo gray "   Only XTLS_API_PORT is configurable (for Xray gRPC API)."
+    colorized_echo gray "   Other internal ports now use unix sockets automatically."
     echo
     
-    # Find available port group
-    local suggested_group=$(find_available_port_group)
-    local suggested_group_ports=""
+    # Set default XTLS_API_PORT
+    XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
     
-    if [ -z "$suggested_group" ]; then
-        colorized_echo red "⚠️  All predefined port groups (61000-61032) are occupied!"
-        colorized_echo yellow "   You'll need to enter custom ports manually."
-        # Set defaults anyway, user will customize
-        XTLS_API_PORT=$DEFAULT_XTLS_API_PORT
-        INTERNAL_REST_PORT=$DEFAULT_INTERNAL_REST_PORT
-        SUPERVISORD_PORT=$DEFAULT_SUPERVISORD_PORT
-    else
-        suggested_group_ports=$(get_port_group "$suggested_group")
-        parse_port_group "$suggested_group_ports"
+    # Check if default port is available
+    if is_port_occupied "$XTLS_API_PORT"; then
+        colorized_echo yellow "⚠️  Default XTLS_API_PORT ($XTLS_API_PORT) is already in use."
+        colorized_echo blue "   You'll need to enter a custom port."
         
-        if [ "$suggested_group" = "0" ]; then
-            colorized_echo green "✅ Default internal ports (61000-61002) are available."
-        else
-            colorized_echo yellow "⚠️  Default internal ports (61000-61002) are already in use."
-            colorized_echo green "✅ Suggesting alternative group $suggested_group: $XTLS_API_PORT, $INTERNAL_REST_PORT, $SUPERVISORD_PORT"
-        fi
-    fi
-    
-    echo
-    read -p "Do you want to customize internal ports? [y/N]: " -r customize_ports
-    if [[ $customize_ports =~ ^[Yy]$ ]]; then
-        echo
-        colorized_echo blue "Enter internal ports (press Enter to use suggested values):"
-        
-        # XTLS_API_PORT
         while true; do
-            read -p "  XTLS_API_PORT (default $XTLS_API_PORT): " -r input_port
-            input_port=${input_port:-$XTLS_API_PORT}
+            read -p "  Enter XTLS_API_PORT: " -r input_port
+            if [ -z "$input_port" ]; then
+                colorized_echo red "  Port is required."
+                continue
+            fi
             if validate_port "$input_port"; then
                 if is_port_occupied "$input_port"; then
                     colorized_echo red "  Port $input_port is already in use."
@@ -817,53 +749,31 @@ install_remnanode() {
                 colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
             fi
         done
-        
-        # INTERNAL_REST_PORT
-        while true; do
-            read -p "  INTERNAL_REST_PORT (default $INTERNAL_REST_PORT): " -r input_port
-            input_port=${input_port:-$INTERNAL_REST_PORT}
-            if validate_port "$input_port"; then
-                if is_port_occupied "$input_port"; then
-                    colorized_echo red "  Port $input_port is already in use."
-                elif [ "$input_port" = "$XTLS_API_PORT" ]; then
-                    colorized_echo red "  Port $input_port is already used for XTLS_API_PORT."
-                else
-                    INTERNAL_REST_PORT=$input_port
-                    break
-                fi
-            else
-                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
-            fi
-        done
-        
-        # SUPERVISORD_PORT
-        while true; do
-            read -p "  SUPERVISORD_PORT (default $SUPERVISORD_PORT): " -r input_port
-            input_port=${input_port:-$SUPERVISORD_PORT}
-            if validate_port "$input_port"; then
-                if is_port_occupied "$input_port"; then
-                    colorized_echo red "  Port $input_port is already in use."
-                elif [ "$input_port" = "$XTLS_API_PORT" ] || [ "$input_port" = "$INTERNAL_REST_PORT" ]; then
-                    colorized_echo red "  Port $input_port is already used for another internal port."
-                else
-                    SUPERVISORD_PORT=$input_port
-                    break
-                fi
-            else
-                colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
-            fi
-        done
-        
-        echo
-        colorized_echo green "✅ Custom internal ports configured:"
     else
+        colorized_echo green "✅ Default XTLS_API_PORT ($XTLS_API_PORT) is available."
+        
         echo
-        colorized_echo green "✅ Using internal ports:"
+        read -p "Do you want to customize XTLS_API_PORT? [y/N]: " -r customize_ports
+        if [[ $customize_ports =~ ^[Yy]$ ]]; then
+            while true; do
+                read -p "  XTLS_API_PORT (default $XTLS_API_PORT): " -r input_port
+                input_port=${input_port:-$XTLS_API_PORT}
+                if validate_port "$input_port"; then
+                    if is_port_occupied "$input_port"; then
+                        colorized_echo red "  Port $input_port is already in use."
+                    else
+                        XTLS_API_PORT=$input_port
+                        break
+                    fi
+                else
+                    colorized_echo red "  Invalid port. Please enter a port between 1 and 65535."
+                fi
+            done
+        fi
     fi
     
-    colorized_echo white "   XTLS_API_PORT:      $XTLS_API_PORT"
-    colorized_echo white "   INTERNAL_REST_PORT: $INTERNAL_REST_PORT"
-    colorized_echo white "   SUPERVISORD_PORT:   $SUPERVISORD_PORT"
+    echo
+    colorized_echo green "✅ Using XTLS_API_PORT: $XTLS_API_PORT"
     echo
 
     # Ask about installing Xray-core
@@ -882,9 +792,7 @@ NODE_PORT=$NODE_PORT
 ### XRAY ###
 SECRET_KEY=$SECRET_KEY_VALUE
 
-### Internal (local) ports
-SUPERVISORD_PORT=$SUPERVISORD_PORT
-INTERNAL_REST_PORT=$INTERNAL_REST_PORT
+### Internal port (only XTLS_API_PORT is configurable since node v2.5.0)
 XTLS_API_PORT=$XTLS_API_PORT
 EOL
     colorized_echo green "Environment file saved in $ENV_FILE"
@@ -979,6 +887,9 @@ uninstall_remnanode_data_files() {
 }
 
 up_remnanode() {
+    # Run migration for deprecated ports before starting (silent mode)
+    migrate_deprecated_ports 2>/dev/null || true
+    
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans
 }
 
@@ -1709,6 +1620,96 @@ EOL
     colorized_echo green "✅ docker-compose.yml updated to use .env file"
 }
 
+# ============================================
+# Migration: Remove deprecated internal ports (v4.0.0)
+# Since remnawave/node v2.5.0, SUPERVISORD_PORT and INTERNAL_REST_PORT
+# are no longer used - they now use unix sockets internally
+# ============================================
+migrate_deprecated_ports() {
+    local env_file="$ENV_FILE"
+    local migrated=false
+    local changes=""
+    
+    if [ ! -f "$env_file" ]; then
+        return 0
+    fi
+    
+    # Check for deprecated variables
+    local has_supervisord_port=false
+    local has_internal_rest_port=false
+    
+    if grep -q "^SUPERVISORD_PORT=" "$env_file" 2>/dev/null; then
+        has_supervisord_port=true
+    fi
+    
+    if grep -q "^INTERNAL_REST_PORT=" "$env_file" 2>/dev/null; then
+        has_internal_rest_port=true
+    fi
+    
+    if [ "$has_supervisord_port" = false ] && [ "$has_internal_rest_port" = false ]; then
+        return 0
+    fi
+    
+    echo
+    colorized_echo cyan "🔄 Migration: Removing deprecated port configurations"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    
+    colorized_echo blue "   Since remnawave/node v2.5.0, internal communication uses unix sockets."
+    colorized_echo blue "   The following deprecated variables will be removed from .env:"
+    
+    if [ "$has_supervisord_port" = true ]; then
+        colorized_echo yellow "   • SUPERVISORD_PORT (now uses /run/supervisord.sock)"
+    fi
+    
+    if [ "$has_internal_rest_port" = true ]; then
+        colorized_echo yellow "   • INTERNAL_REST_PORT (now uses /run/remnawave-internal.sock)"
+    fi
+    
+    echo
+    
+    # Create backup before modifying
+    local backup_file="${env_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$env_file" "$backup_file"
+    
+    # Remove deprecated variables
+    if [ "$has_supervisord_port" = true ]; then
+        sed -i '/^SUPERVISORD_PORT=/d' "$env_file"
+        colorized_echo green "   ✅ Removed SUPERVISORD_PORT"
+        migrated=true
+    fi
+    
+    if [ "$has_internal_rest_port" = true ]; then
+        sed -i '/^INTERNAL_REST_PORT=/d' "$env_file"
+        colorized_echo green "   ✅ Removed INTERNAL_REST_PORT"
+        migrated=true
+    fi
+    
+    # Remove old comment section if exists
+    sed -i '/^### Internal (local) ports$/d' "$env_file"
+    
+    # Update comment for XTLS_API_PORT if it exists
+    if grep -q "^XTLS_API_PORT=" "$env_file"; then
+        # Check if there's already the new comment above it
+        if ! grep -q "^### Internal port" "$env_file"; then
+            sed -i 's/^XTLS_API_PORT=/\n### Internal port (only XTLS_API_PORT is configurable since node v2.5.0)\nXTLS_API_PORT=/' "$env_file"
+            # Remove any resulting double newlines
+            sed -i '/^$/N;/^\n$/d' "$env_file"
+        fi
+    fi
+    
+    # Remove empty lines at the end of file and clean up
+    sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$env_file" 2>/dev/null || true
+    
+    if [ "$migrated" = true ]; then
+        echo
+        colorized_echo green "🎉 Migration completed successfully!"
+        colorized_echo gray "   Backup saved: $backup_file"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    fi
+    
+    return 0
+}
+
 # Старая функция для обратной совместимости (теперь просто вызывает новую)
 # migrate_env_variables() - уже определена выше
 
@@ -1878,6 +1879,9 @@ update_command() {
         # Проверяем и мигрируем переменные окружения
         echo -e "\033[38;5;250m📝 Step 4:\033[0m Checking environment variables..."
         migrate_env_variables
+        
+        # Миграция устаревших портов (v4.0.0+)
+        migrate_deprecated_ports
         
         # Проверяем, запущен ли контейнер
         local was_running=false
@@ -2962,24 +2966,36 @@ ports_command() {
     fi
     printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "NODE_PORT:" "${node_port:-3000 (default)}"
     
-    # Internal ports
+    # Internal port (only XTLS_API_PORT is configurable since node v2.5.0)
     echo
-    echo -e "\033[1;37m🔧 Internal Ports:\033[0m"
+    echo -e "\033[1;37m🔧 Internal Port:\033[0m"
     
     local xtls_port=$(get_env_variable "XTLS_API_PORT")
+    
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "XTLS_API_PORT:" "${xtls_port:-$DEFAULT_XTLS_API_PORT (default)}"
+    
+    # Check for deprecated ports and show warning
     local rest_port=$(get_env_variable "INTERNAL_REST_PORT")
     local supervisord_port=$(get_env_variable "SUPERVISORD_PORT")
     
-    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "XTLS_API_PORT:" "${xtls_port:-$DEFAULT_XTLS_API_PORT (default)}"
-    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "INTERNAL_REST_PORT:" "${rest_port:-$DEFAULT_INTERNAL_REST_PORT (default)}"
-    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "SUPERVISORD_PORT:" "${supervisord_port:-$DEFAULT_SUPERVISORD_PORT (default)}"
-    
-    # Check if internal ports are explicitly set
-    if [ -z "$xtls_port" ] && [ -z "$rest_port" ] && [ -z "$supervisord_port" ]; then
+    if [ -n "$rest_port" ] || [ -n "$supervisord_port" ]; then
         echo
-        colorized_echo gray "   ℹ️  Internal ports not explicitly set in .env"
-        colorized_echo gray "   Container will use default values (61000-61002)"
+        colorized_echo yellow "   ⚠️  Deprecated ports detected in .env:"
+        if [ -n "$rest_port" ]; then
+            colorized_echo yellow "      • INTERNAL_REST_PORT (now uses unix socket)"
+        fi
+        if [ -n "$supervisord_port" ]; then
+            colorized_echo yellow "      • SUPERVISORD_PORT (now uses unix socket)"
+        fi
+        colorized_echo gray "   Run '$APP_NAME migrate' to clean up"
     fi
+    
+    # Unix sockets info
+    echo
+    echo -e "\033[1;37m🔗 Internal Communication (unix sockets):\033[0m"
+    colorized_echo gray "   Since node v2.5.0, internal services use unix sockets:"
+    printf "   \033[38;5;244m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "Supervisord:" "/run/supervisord.sock"
+    printf "   \033[38;5;244m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "Internal REST:" "/run/remnawave-internal.sock"
     
     # Show connection info
     echo
@@ -3268,7 +3284,7 @@ case "${COMMAND:-menu}" in
     xray-log-err) xray_log_err ;;
     update) update_command ;;
     core-update) update_core_command ;;
-    migrate) migrate_env_variables ;;
+    migrate) migrate_env_variables; migrate_deprecated_ports ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
     ports) ports_command ;;
