@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.6.1
+# VERSION=2.7.0
 
-SCRIPT_VERSION="2.6.1"
+SCRIPT_VERSION="2.7.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -60,6 +60,16 @@ ACME_HOME="$HOME/.acme.sh"
 ACME_INSTALL_URL="https://get.acme.sh"
 ACME_PORT=""  # Will be auto-detected or set via --acme-port
 ACME_FALLBACK_PORTS=(8443 9443 10443 18443 28443)
+
+# Force mode - skip DNS validation and interactive prompts
+FORCE_MODE=false
+FORCE_DOMAIN=""
+FORCE_PORT=""
+FORCE_TEMPLATE=""
+
+# Manual SSL certificate paths (for wildcard/custom certs)
+MANUAL_SSL_CERT=""
+MANUAL_SSL_KEY=""
 
 # Web Server Selection (caddy or nginx)
 WEB_SERVER="caddy"
@@ -1104,6 +1114,96 @@ while [ $# -gt 0 ]; do
             fi
             shift
             ;;
+        --force|-f)
+            # Force mode - skip DNS validation and interactive prompts
+            FORCE_MODE=true
+            shift
+            ;;
+        --domain)
+            if [ -n "$2" ] && [[ ! "$2" =~ ^- ]]; then
+                FORCE_DOMAIN="$2"
+                shift 2
+            else
+                log_error "--domain requires a domain name"
+                exit 1
+            fi
+            ;;
+        --domain=*)
+            FORCE_DOMAIN="${1#*=}"
+            if [ -z "$FORCE_DOMAIN" ]; then
+                log_error "--domain requires a domain name"
+                exit 1
+            fi
+            shift
+            ;;
+        --port)
+            if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                FORCE_PORT="$2"
+                shift 2
+            else
+                log_error "--port requires a valid port number"
+                exit 1
+            fi
+            ;;
+        --port=*)
+            FORCE_PORT="${1#*=}"
+            if ! [[ "$FORCE_PORT" =~ ^[0-9]+$ ]]; then
+                log_error "--port requires a valid port number"
+                exit 1
+            fi
+            shift
+            ;;
+        --template)
+            if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                FORCE_TEMPLATE="$2"
+                shift 2
+            else
+                log_error "--template requires a template number (1-11)"
+                exit 1
+            fi
+            ;;
+        --template=*)
+            FORCE_TEMPLATE="${1#*=}"
+            if ! [[ "$FORCE_TEMPLATE" =~ ^[0-9]+$ ]]; then
+                log_error "--template requires a template number (1-11)"
+                exit 1
+            fi
+            shift
+            ;;
+        --ssl-cert)
+            if [ -n "$2" ] && [[ ! "$2" =~ ^- ]]; then
+                MANUAL_SSL_CERT="$2"
+                shift 2
+            else
+                log_error "--ssl-cert requires a path to certificate file"
+                exit 1
+            fi
+            ;;
+        --ssl-cert=*)
+            MANUAL_SSL_CERT="${1#*=}"
+            if [ -z "$MANUAL_SSL_CERT" ]; then
+                log_error "--ssl-cert requires a path to certificate file"
+                exit 1
+            fi
+            shift
+            ;;
+        --ssl-key)
+            if [ -n "$2" ] && [[ ! "$2" =~ ^- ]]; then
+                MANUAL_SSL_KEY="$2"
+                shift 2
+            else
+                log_error "--ssl-key requires a path to key file"
+                exit 1
+            fi
+            ;;
+        --ssl-key=*)
+            MANUAL_SSL_KEY="${1#*=}"
+            if [ -z "$MANUAL_SSL_KEY" ]; then
+                log_error "--ssl-key requires a path to key file"
+                exit 1
+            fi
+            shift
+            ;;
         -*)
             log_error "Unknown option: $1"
             echo "Use --help for usage information."
@@ -1508,6 +1608,14 @@ create_caddy_config() {
     local domain="$1"
     local port="$2"
     
+    # Determine if using manual SSL certificates
+    local use_manual_ssl=false
+    local ssl_source="Automatic (Caddy internal)"
+    if [ -n "$MANUAL_SSL_CERT" ] && [ -n "$MANUAL_SSL_KEY" ]; then
+        use_manual_ssl=true
+        ssl_source="Manual (wildcard certificate)"
+    fi
+    
     # Create .env file
     cat > "$APP_DIR/.env" << EOF
 # Caddy for Reality Selfsteal Configuration
@@ -1518,12 +1626,103 @@ SELF_STEAL_PORT=$port
 
 # Generated on $(date)
 # Server IP: $NODE_IP
+# SSL: $ssl_source
 EOF
 
     log_success ".env file created"
+    
+    # Handle manual SSL certificates
+    if [ "$use_manual_ssl" = true ]; then
+        echo
+        echo -e "${WHITE}🔐 SSL Certificate Configuration${NC}"
+        echo -e "${GRAY}$(printf '─%.0s' $(seq 1 40))${NC}"
+        echo
+        
+        log_info "Using manual SSL certificates..."
+        
+        # Create SSL directory
+        create_dir_safe "$APP_DIR/ssl" || return 1
+        
+        # Validate that files exist
+        if [ ! -f "$MANUAL_SSL_CERT" ]; then
+            log_error "SSL certificate file not found: $MANUAL_SSL_CERT"
+            return 1
+        fi
+        if [ ! -f "$MANUAL_SSL_KEY" ]; then
+            log_error "SSL key file not found: $MANUAL_SSL_KEY"
+            return 1
+        fi
+        
+        # Copy certificates to SSL directory
+        cp "$MANUAL_SSL_CERT" "$APP_DIR/ssl/fullchain.crt" || {
+            log_error "Failed to copy SSL certificate"
+            return 1
+        }
+        cp "$MANUAL_SSL_KEY" "$APP_DIR/ssl/private.key" || {
+            log_error "Failed to copy SSL key"
+            return 1
+        }
+        
+        # Set proper permissions
+        chmod 600 "$APP_DIR/ssl/private.key"
+        chmod 644 "$APP_DIR/ssl/fullchain.crt"
+        
+        log_success "Manual SSL certificates installed"
+        
+        # Validate certificate matches domain (or is wildcard)
+        local cert_domain
+        cert_domain=$(openssl x509 -in "$APP_DIR/ssl/fullchain.crt" -noout -subject 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,]+' || true)
+        
+        if [ -n "$cert_domain" ]; then
+            echo -e "${GRAY}   Certificate CN: $cert_domain${NC}"
+            
+            # Check if it's a wildcard that matches
+            if [[ "$cert_domain" == "*."* ]]; then
+                local wildcard_base="${cert_domain#\*.}"
+                if [[ "$domain" == *".$wildcard_base" ]] || [[ "$domain" == "$wildcard_base" ]]; then
+                    log_success "Wildcard certificate matches domain"
+                else
+                    log_warning "Wildcard certificate may not match domain $domain"
+                fi
+            elif [ "$cert_domain" != "$domain" ]; then
+                log_warning "Certificate CN ($cert_domain) doesn't match domain ($domain)"
+            else
+                log_success "Certificate matches domain"
+            fi
+        fi
+    fi
 
-    # Create docker-compose.yml
-    cat > "$APP_DIR/docker-compose.yml" << EOF
+    # Create docker-compose.yml with or without SSL volume
+    if [ "$use_manual_ssl" = true ]; then
+        cat > "$APP_DIR/docker-compose.yml" << EOF
+services:
+  caddy:
+    image: caddy:${CADDY_VERSION}
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ${HTML_DIR}:/var/www/html
+      - ./logs:/var/log/caddy
+      - ./ssl:/etc/caddy/ssl:ro
+      - ${VOLUME_PREFIX}_data:/data
+      - ${VOLUME_PREFIX}_config:/config
+    env_file:
+      - .env
+    network_mode: "host"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ${VOLUME_PREFIX}_data:
+  ${VOLUME_PREFIX}_config:
+EOF
+        log_success "docker-compose.yml created (with manual SSL)"
+    else
+        cat > "$APP_DIR/docker-compose.yml" << EOF
 services:
   caddy:
     image: caddy:${CADDY_VERSION}
@@ -1548,11 +1747,79 @@ volumes:
   ${VOLUME_PREFIX}_data:
   ${VOLUME_PREFIX}_config:
 EOF
+        log_success "docker-compose.yml created"
+    fi
 
-    log_success "docker-compose.yml created"
+    # Create Caddyfile - different config for manual vs automatic SSL
+    if [ "$use_manual_ssl" = true ]; then
+        # Caddyfile with manual SSL certificates
+        cat > "$APP_DIR/Caddyfile" << 'EOF'
+{
+	https_port {$SELF_STEAL_PORT}
+	default_bind 127.0.0.1
+	servers {
+		listener_wrappers {
+			proxy_protocol {
+				allow 127.0.0.1/32
+			}
+			tls
+		}
+	}
+	auto_https disable_redirects
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		level ERROR
+		format json
+	}
+}
 
-    # Create Caddyfile
-    cat > "$APP_DIR/Caddyfile" << 'EOF'
+http://{$SELF_STEAL_DOMAIN} {
+	bind 0.0.0.0
+	redir https://{$SELF_STEAL_DOMAIN}{uri} permanent
+	log {
+		output file /var/log/caddy/redirect.log {
+			roll_size 5MB
+			roll_keep 3
+			roll_keep_for 168h
+		}
+	}
+}
+
+https://{$SELF_STEAL_DOMAIN} {
+	tls /etc/caddy/ssl/fullchain.crt /etc/caddy/ssl/private.key
+	root * /var/www/html
+	try_files {path} /index.html
+	file_server
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		level ERROR
+	}
+}
+
+:{$SELF_STEAL_PORT} {
+	tls internal
+	respond 204
+	log off
+}
+
+:80 {
+	bind 0.0.0.0
+	respond 204
+	log off
+}
+EOF
+        log_success "Caddyfile created (with manual SSL)"
+    else
+        # Caddyfile with automatic SSL (Caddy internal)
+        cat > "$APP_DIR/Caddyfile" << 'EOF'
 {
 	https_port {$SELF_STEAL_PORT}
 	default_bind 127.0.0.1
@@ -1614,8 +1881,8 @@ https://{$SELF_STEAL_DOMAIN} {
 	log off
 }
 EOF
-
-    log_success "Caddyfile created"
+        log_success "Caddyfile created"
+    fi
 }
 
 # Create Nginx configuration files
@@ -1633,6 +1900,12 @@ create_nginx_config() {
         connection_target="127.0.0.1:$port"
     fi
     
+    # Determine SSL source
+    local ssl_source="ACME (Let's Encrypt)"
+    if [ -n "$MANUAL_SSL_CERT" ] && [ -n "$MANUAL_SSL_KEY" ]; then
+        ssl_source="Manual (wildcard certificate)"
+    fi
+    
     cat > "$APP_DIR/.env" << EOF
 # Nginx for Reality Selfsteal Configuration
 # Web Server: Nginx
@@ -1646,7 +1919,7 @@ SELF_STEAL_PORT=$port
 
 # Generated on $(date)
 # Server IP: $NODE_IP
-# SSL: ACME (Let's Encrypt)
+# SSL: $ssl_source
 EOF
 
     log_success ".env file created"
@@ -1662,75 +1935,146 @@ EOF
     
     [ "$DEBUG_MODE" = true ] && echo "DEBUG: Directories created, starting SSL certificate process"
     
-    # Obtain SSL certificate via ACME
+    # Obtain SSL certificate via ACME or use manual certificates
     echo
     echo -e "${WHITE}🔐 SSL Certificate Configuration${NC}"
     echo -e "${GRAY}$(printf '─%.0s' $(seq 1 40))${NC}"
     echo
     
-    # Pre-check: verify ACME port is available
-    local acme_port_check="${ACME_PORT:-8443}"
-    log_info "Checking ACME port availability..."
-    
-    if ss -tlnp 2>/dev/null | grep -q ":$acme_port_check " 2>/dev/null; then
-        local blocking_process
-        blocking_process=$(ss -tlnp 2>/dev/null | grep ":$acme_port_check " | head -1)
-        log_warning "Port $acme_port_check is currently in use!"
-        echo -e "${GRAY}   $blocking_process${NC}"
-        echo
-        echo -e "${WHITE}This may cause certificate issuance to fail.${NC}"
-        echo -e "${GRAY}The script will try fallback ports: ${ACME_FALLBACK_PORTS[*]}${NC}"
-        echo
-    else
-        log_success "Port $acme_port_check is available"
-    fi
-    
-    log_info "Obtaining SSL certificate from Let's Encrypt..."
-    echo
-    
-    [ "$DEBUG_MODE" = true ] && echo "DEBUG: Calling issue_ssl_certificate"
-    
-    # Issue certificate with skip_reload=true since container doesn't exist yet
-    if issue_ssl_certificate "$domain" "$APP_DIR/ssl" "true"; then
-        log_success "SSL certificate obtained successfully"
+    # Check if manual SSL certificates are provided
+    if [ -n "$MANUAL_SSL_CERT" ] && [ -n "$MANUAL_SSL_KEY" ]; then
+        log_info "Using manual SSL certificates..."
         
-        # Setup auto-renewal
-        setup_ssl_auto_renewal
-    else
-        log_error "Failed to obtain SSL certificate"
-        echo
-        echo -e "${WHITE}Troubleshooting:${NC}"
-        echo
-        echo -e "${YELLOW}   1. Check acme.sh installed:${NC}"
-        echo -e "${GRAY}      ls ~/.acme.sh/acme.sh${NC}"
-        echo -e "${GRAY}      Fix: curl https://get.acme.sh | sh -s email=my@example.com${NC}"
-        echo
-        echo -e "${YELLOW}   2. Check DNS:${NC}"
-        echo -e "${GRAY}      nslookup $domain${NC}"
-        echo -e "${GRAY}      → Should return this server's IP${NC}"
-        echo
-        echo -e "${YELLOW}   3. Check firewall (port 8443):${NC}"
-        echo -e "${GRAY}      ss -tlnp | grep 8443${NC}"
-        echo -e "${GRAY}      ufw allow 8443/tcp  OR  iptables -A INPUT -p tcp --dport 8443 -j ACCEPT${NC}"
-        echo
-        echo -e "${YELLOW}   4. Check if port is in use:${NC}"
-        echo -e "${GRAY}      ss -tlnp | grep ':8443'${NC}"
-        echo
-        read -p "Continue with self-signed certificate (not recommended)? [y/N]: " -r use_selfsigned
-        if [[ $use_selfsigned =~ ^[Yy]$ ]]; then
-            log_warning "Generating self-signed certificate as fallback..."
-            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-                -keyout "$APP_DIR/ssl/private.key" \
-                -out "$APP_DIR/ssl/fullchain.crt" \
-                -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" 2>/dev/null || {
-                log_error "Failed to generate self-signed certificate"
-                return 1
-            }
-            log_warning "Using self-signed certificate (browser warnings expected)"
-        else
+        # Validate that files exist
+        if [ ! -f "$MANUAL_SSL_CERT" ]; then
+            log_error "SSL certificate file not found: $MANUAL_SSL_CERT"
             return 1
         fi
-    fi
+        if [ ! -f "$MANUAL_SSL_KEY" ]; then
+            log_error "SSL key file not found: $MANUAL_SSL_KEY"
+            return 1
+        fi
+        
+        # Copy certificates to SSL directory
+        cp "$MANUAL_SSL_CERT" "$APP_DIR/ssl/fullchain.crt" || {
+            log_error "Failed to copy SSL certificate"
+            return 1
+        }
+        cp "$MANUAL_SSL_KEY" "$APP_DIR/ssl/private.key" || {
+            log_error "Failed to copy SSL key"
+            return 1
+        }
+        
+        # Set proper permissions
+        chmod 600 "$APP_DIR/ssl/private.key"
+        chmod 644 "$APP_DIR/ssl/fullchain.crt"
+        
+        log_success "Manual SSL certificates installed"
+        
+        # Validate certificate matches domain (or is wildcard)
+        local cert_domain
+        cert_domain=$(openssl x509 -in "$APP_DIR/ssl/fullchain.crt" -noout -subject 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,]+' || true)
+        
+        if [ -n "$cert_domain" ]; then
+            echo -e "${GRAY}   Certificate CN: $cert_domain${NC}"
+            
+            # Check if it's a wildcard that matches
+            if [[ "$cert_domain" == "*."* ]]; then
+                local wildcard_base="${cert_domain#\*.}"
+                if [[ "$domain" == *".$wildcard_base" ]] || [[ "$domain" == "$wildcard_base" ]]; then
+                    log_success "Wildcard certificate matches domain"
+                else
+                    log_warning "Wildcard certificate may not match domain $domain"
+                fi
+            elif [ "$cert_domain" != "$domain" ]; then
+                log_warning "Certificate CN ($cert_domain) doesn't match domain ($domain)"
+            else
+                log_success "Certificate matches domain"
+            fi
+        fi
+        
+        # Show certificate info
+        show_ssl_certificate_info "$APP_DIR/ssl"
+    else
+        # Use ACME for certificate
+        # Pre-check: verify ACME port is available
+        local acme_port_check="${ACME_PORT:-8443}"
+        log_info "Checking ACME port availability..."
+        
+        if ss -tlnp 2>/dev/null | grep -q ":$acme_port_check " 2>/dev/null; then
+            local blocking_process
+            blocking_process=$(ss -tlnp 2>/dev/null | grep ":$acme_port_check " | head -1)
+            log_warning "Port $acme_port_check is currently in use!"
+            echo -e "${GRAY}   $blocking_process${NC}"
+            echo
+            echo -e "${WHITE}This may cause certificate issuance to fail.${NC}"
+            echo -e "${GRAY}The script will try fallback ports: ${ACME_FALLBACK_PORTS[*]}${NC}"
+            echo
+        else
+            log_success "Port $acme_port_check is available"
+        fi
+        
+        log_info "Obtaining SSL certificate from Let's Encrypt..."
+        echo
+        
+        [ "$DEBUG_MODE" = true ] && echo "DEBUG: Calling issue_ssl_certificate"
+        
+        # Issue certificate with skip_reload=true since container doesn't exist yet
+        if issue_ssl_certificate "$domain" "$APP_DIR/ssl" "true"; then
+            log_success "SSL certificate obtained successfully"
+            
+            # Setup auto-renewal
+            setup_ssl_auto_renewal
+        else
+            log_error "Failed to obtain SSL certificate"
+            echo
+            echo -e "${WHITE}Troubleshooting:${NC}"
+            echo
+            echo -e "${YELLOW}   1. Check acme.sh installed:${NC}"
+            echo -e "${GRAY}      ls ~/.acme.sh/acme.sh${NC}"
+            echo -e "${GRAY}      Fix: curl https://get.acme.sh | sh -s email=my@example.com${NC}"
+            echo
+            echo -e "${YELLOW}   2. Check DNS:${NC}"
+            echo -e "${GRAY}      nslookup $domain${NC}"
+            echo -e "${GRAY}      → Should return this server's IP${NC}"
+            echo
+            echo -e "${YELLOW}   3. Check firewall (port 8443):${NC}"
+            echo -e "${GRAY}      ss -tlnp | grep 8443${NC}"
+            echo -e "${GRAY}      ufw allow 8443/tcp  OR  iptables -A INPUT -p tcp --dport 8443 -j ACCEPT${NC}"
+            echo
+            echo -e "${YELLOW}   4. Check if port is in use:${NC}"
+            echo -e "${GRAY}      ss -tlnp | grep ':8443'${NC}"
+            echo
+            
+            # In force mode, auto-generate self-signed certificate
+            if [ "$FORCE_MODE" = true ]; then
+                log_warning "Force mode: generating self-signed certificate..."
+                openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                    -keyout "$APP_DIR/ssl/private.key" \
+                    -out "$APP_DIR/ssl/fullchain.crt" \
+                    -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" 2>/dev/null || {
+                    log_error "Failed to generate self-signed certificate"
+                    return 1
+                }
+                log_warning "Using self-signed certificate (browser warnings expected)"
+            else
+                read -p "Continue with self-signed certificate (not recommended)? [y/N]: " -r use_selfsigned
+                if [[ $use_selfsigned =~ ^[Yy]$ ]]; then
+                    log_warning "Generating self-signed certificate as fallback..."
+                    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                        -keyout "$APP_DIR/ssl/private.key" \
+                        -out "$APP_DIR/ssl/fullchain.crt" \
+                        -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" 2>/dev/null || {
+                        log_error "Failed to generate self-signed certificate"
+                        return 1
+                    }
+                    log_warning "Using self-signed certificate (browser warnings expected)"
+                else
+                    return 1
+                fi
+            fi
+        fi
+    fi  # End of SSL certificate configuration (manual vs ACME)
     
     [ "$DEBUG_MODE" = true ] && echo "DEBUG: SSL certificate process completed, creating docker-compose.yml"
 
@@ -1993,6 +2337,13 @@ EOF
 install_command() {
     check_running_as_root
     
+    # Validate force mode requirements
+    if [ "$FORCE_MODE" = true ] && [ -z "$FORCE_DOMAIN" ]; then
+        log_error "Force mode requires --domain parameter"
+        echo -e "${GRAY}   Example: selfsteal --nginx --force --domain reality.example.com install${NC}"
+        return 1
+    fi
+    
     clear
     local server_display_name
     if [ "$WEB_SERVER" = "nginx" ]; then
@@ -2034,21 +2385,54 @@ install_command() {
         # Check if trying to install the same server
         if [ "$existing_install" = "$WEB_SERVER" ]; then
             echo -e "${YELLOW}⚠️  $existing_name is already installed${NC}"
-            echo
-            echo -e "${WHITE}Options:${NC}"
-            echo -e "   ${WHITE}1)${NC} ${GRAY}Reinstall $existing_name${NC}"
-            echo -e "   ${WHITE}2)${NC} ${GRAY}Cancel${NC}"
+            
+            # In force mode, automatically reinstall
+            if [ "$FORCE_MODE" = true ]; then
+                log_info "Force mode: reinstalling $existing_name..."
+                local remove_dir
+                if [ "$existing_install" = "nginx" ]; then
+                    remove_dir="/opt/nginx-selfsteal"
+                else
+                    remove_dir="/opt/caddy"
+                fi
+                cd "$remove_dir" 2>/dev/null && docker compose down 2>/dev/null || true
+                rm -rf "$remove_dir"
+                log_success "Existing installation removed"
+            else
+                echo
+                echo -e "${WHITE}Options:${NC}"
+                echo -e "   ${WHITE}1)${NC} ${GRAY}Reinstall $existing_name${NC}"
+                echo -e "   ${WHITE}2)${NC} ${GRAY}Cancel${NC}"
+            fi
         else
             # Trying to install different server
             echo -e "${YELLOW}⚠️  $existing_name is already installed${NC}"
             echo -e "${GRAY}   Only one web server can be installed at a time.${NC}"
-            echo
-            echo -e "${WHITE}Options:${NC}"
-            echo -e "   ${WHITE}1)${NC} ${GRAY}Replace $existing_name with $server_display_name${NC}"
-            echo -e "   ${WHITE}2)${NC} ${GRAY}Cancel installation${NC}"
+            
+            # In force mode, automatically replace
+            if [ "$FORCE_MODE" = true ]; then
+                log_info "Force mode: replacing $existing_name with $server_display_name..."
+                local remove_dir
+                if [ "$existing_install" = "nginx" ]; then
+                    remove_dir="/opt/nginx-selfsteal"
+                else
+                    remove_dir="/opt/caddy"
+                fi
+                cd "$remove_dir" 2>/dev/null && docker compose down 2>/dev/null || true
+                rm -rf "$remove_dir"
+                log_success "Existing installation removed"
+            else
+                echo
+                echo -e "${WHITE}Options:${NC}"
+                echo -e "   ${WHITE}1)${NC} ${GRAY}Replace $existing_name with $server_display_name${NC}"
+                echo -e "   ${WHITE}2)${NC} ${GRAY}Cancel installation${NC}"
+            fi
         fi
-        echo
-        read -p "Select option [1-2]: " reinstall_choice
+        
+        # Interactive mode - ask user
+        if [ "$FORCE_MODE" != true ]; then
+            echo
+            read -p "Select option [1-2]: " reinstall_choice
         
         case "$reinstall_choice" in
             1)
@@ -2107,6 +2491,7 @@ install_command() {
                 return 0
                 ;;
         esac
+        fi  # End of interactive mode block for existing install
     fi
 
     # Check system requirements
@@ -2120,64 +2505,79 @@ install_command() {
     echo
 
     # Domain configuration
-    echo -e "${WHITE}🌐 Domain Configuration${NC}"
-    echo -e "${GRAY}This domain should match your Xray Reality configuration (realitySettings.serverNames)${NC}"
-    echo
-    
     local domain=""
     local skip_dns_check=false
     
-    while [ -z "$domain" ]; do
-        read -p "Enter your domain (e.g., reality.example.com): " domain
-        if [ -z "$domain" ]; then
-            log_error "Domain cannot be empty!"
-            continue
-        fi
-        
+    # Force mode - use provided domain
+    if [ "$FORCE_MODE" = true ] && [ -n "$FORCE_DOMAIN" ]; then
+        domain="$FORCE_DOMAIN"
+        skip_dns_check=true
+        log_info "Force mode: using domain $domain"
+    else
+        echo -e "${WHITE}🌐 Domain Configuration${NC}"
+        echo -e "${GRAY}This domain should match your Xray Reality configuration (realitySettings.serverNames)${NC}"
         echo
-        echo -e "${WHITE}🔍 DNS Validation Options:${NC}"
-        echo -e "   ${WHITE}1)${NC} ${GRAY}Validate DNS configuration (recommended)${NC}"
-        echo -e "   ${WHITE}2)${NC} ${GRAY}Skip DNS validation (for testing/development)${NC}"
-        echo
-        
-        read -p "Select option [1-2]: " dns_choice
-        
-        case "$dns_choice" in
-            1)
-                echo
-                if ! validate_domain_dns "$domain" "$NODE_IP"; then
-                    echo
-                    read -p "Try a different domain? [Y/n]: " -r try_again
-                    if [[ ! $try_again =~ ^[Nn]$ ]]; then
-                        domain=""
-                        continue
-                    else
-                        return 1
-                    fi
-                fi
-                ;;
-            2)
-                log_warning "Skipping DNS validation..."
-                skip_dns_check=true
-                ;;
-            *)
-                log_error "Invalid option!"
-                domain=""
+    
+        while [ -z "$domain" ]; do
+            read -p "Enter your domain (e.g., reality.example.com): " domain
+            if [ -z "$domain" ]; then
+                log_error "Domain cannot be empty!"
                 continue
-                ;;
-        esac
-    done
+            fi
+            
+            echo
+            echo -e "${WHITE}🔍 DNS Validation Options:${NC}"
+            echo -e "   ${WHITE}1)${NC} ${GRAY}Validate DNS configuration (recommended)${NC}"
+            echo -e "   ${WHITE}2)${NC} ${GRAY}Skip DNS validation (for testing/development)${NC}"
+            echo
+            
+            read -p "Select option [1-2]: " dns_choice
+            
+            case "$dns_choice" in
+                1)
+                    echo
+                    if ! validate_domain_dns "$domain" "$NODE_IP"; then
+                        echo
+                        read -p "Try a different domain? [Y/n]: " -r try_again
+                        if [[ ! $try_again =~ ^[Nn]$ ]]; then
+                            domain=""
+                            continue
+                        else
+                            return 1
+                        fi
+                    fi
+                    ;;
+                2)
+                    log_warning "Skipping DNS validation..."
+                    skip_dns_check=true
+                    ;;
+                *)
+                    log_error "Invalid option!"
+                    domain=""
+                    continue
+                    ;;
+            esac
+        done
+    fi  # End of interactive domain input
 
     # Port configuration (skip for socket mode)
     local port="$DEFAULT_PORT"
     
+    # Force mode - use provided port if specified
+    if [ "$FORCE_MODE" = true ] && [ -n "$FORCE_PORT" ]; then
+        port="$FORCE_PORT"
+        log_info "Force mode: using port $port"
+    fi
+    
     if [ "$WEB_SERVER" = "nginx" ] && [ "$USE_SOCKET" = true ]; then
         # Socket mode - no port needed for Xray communication
-        echo
-        echo -e "${WHITE}🔌 Connection Mode: Unix Socket${NC}"
-        echo -e "${GRAY}Socket path: $SOCKET_PATH${NC}"
-        echo -e "${GRAY}No TCP port configuration needed for Xray communication${NC}"
-    else
+        if [ "$FORCE_MODE" != true ]; then
+            echo
+            echo -e "${WHITE}🔌 Connection Mode: Unix Socket${NC}"
+            echo -e "${GRAY}Socket path: $SOCKET_PATH${NC}"
+            echo -e "${GRAY}No TCP port configuration needed for Xray communication${NC}"
+        fi
+    elif [ "$FORCE_MODE" != true ]; then
         echo
         echo -e "${WHITE}🔌 Port Configuration${NC}"
         echo -e "${GRAY}This port should match your Xray Reality configuration (realitySettings.dest)${NC}"
@@ -2187,12 +2587,12 @@ install_command() {
         if [ -n "$input_port" ]; then
             port="$input_port"
         fi
+    fi
 
-        # Validate port
-        if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-            log_error "Invalid port number!"
-            return 1
-        fi
+    # Validate port
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        log_error "Invalid port number!"
+        return 1
     fi
 
     # Summary
@@ -2219,12 +2619,22 @@ install_command() {
         printf "   ${WHITE}%-20s${NC} ${GREEN}%s${NC}\n" "DNS Validation:" "PASSED"
     fi
     
+    # Show manual SSL certificate info if provided
+    if [ -n "$MANUAL_SSL_CERT" ] && [ -n "$MANUAL_SSL_KEY" ]; then
+        printf "   ${WHITE}%-20s${NC} ${CYAN}%s${NC}\n" "SSL Certificate:" "Manual (wildcard)"
+    fi
+    
     echo
 
-    read -p "Proceed with installation? [Y/n]: " -r confirm
-    if [[ $confirm =~ ^[Nn]$ ]]; then
-        echo -e "${GRAY}Installation cancelled${NC}"
-        return 0
+    # In force mode, skip confirmation
+    if [ "$FORCE_MODE" != true ]; then
+        read -p "Proceed with installation? [Y/n]: " -r confirm
+        if [[ $confirm =~ ^[Nn]$ ]]; then
+            echo -e "${GRAY}Installation cancelled${NC}"
+            return 0
+        fi
+    else
+        log_info "Force mode: proceeding with installation..."
     fi
 
     # Create directories
@@ -2248,27 +2658,42 @@ install_command() {
     else
         create_caddy_config "$domain" "$port"
     fi
-
     # Install random template instead of default HTML
     echo
-    echo -e "${WHITE}🎨 Installing Random Template${NC}"
+    echo -e "${WHITE}🎨 Installing Template${NC}"
     echo -e "${GRAY}$(printf '─%.0s' $(seq 1 35))${NC}"
     
     # List of available templates
     local templates=("1" "2" "3" "4" "5" "6" "7" "8" "9" "10" "11")
     local template_names=("10gag" "Converter" "Convertit" "Downloader" "FileCloud" "Games-site" "ModManager" "SpeedTest" "YouTube" "503 Error v1" "503 Error v2")
     
-    # Select random template
-    local random_index=$((RANDOM % ${#templates[@]}))
-    local selected_template=${templates[$random_index]}
-    local selected_name=${template_names[$random_index]}
+    local selected_template=""
+    local selected_name=""
     local installed_template=""
     
-    echo -e "${CYAN}🎲 Selected template: ${selected_name}${NC}"
+    # Check if template was specified via --template flag
+    if [ -n "$FORCE_TEMPLATE" ]; then
+        if [[ "$FORCE_TEMPLATE" =~ ^[1-9]$|^1[01]$ ]]; then
+            selected_template="$FORCE_TEMPLATE"
+            selected_name="${template_names[$((FORCE_TEMPLATE - 1))]}"
+            log_info "Using specified template: $selected_name"
+        else
+            log_warning "Invalid template number ($FORCE_TEMPLATE), using random"
+            local random_index=$((RANDOM % ${#templates[@]}))
+            selected_template=${templates[$random_index]}
+            selected_name=${template_names[$random_index]}
+        fi
+    else
+        # Select random template
+        local random_index=$((RANDOM % ${#templates[@]}))
+        selected_template=${templates[$random_index]}
+        selected_name=${template_names[$random_index]}
+        echo -e "${CYAN}🎲 Selected template: ${selected_name}${NC}"
+    fi
     echo
     
     if download_template "$selected_template"; then
-        log_success "Random template installed successfully"
+        log_success "Template installed successfully"
         installed_template="$selected_name template"
     else
         log_warning "Failed to download template, creating fallback"
@@ -3751,16 +4176,26 @@ show_help() {
     echo -e "${WHITE}$server_name for Reality Selfsteal Management Script v$SCRIPT_VERSION${NC}"
     echo
     echo -e "${WHITE}Usage:${NC}"
-    echo -e "  ${CYAN}$APP_NAME${NC} [${GRAY}command${NC}] [${GRAY}--nginx|--caddy${NC}]"
+    echo -e "  ${CYAN}$APP_NAME${NC} [${GRAY}command${NC}] [${GRAY}options${NC}]"
     echo
     echo -e "${WHITE}Server Options:${NC}"
-    printf "   ${CYAN}%-18s${NC} %s\n" "--nginx" "Use Nginx as web server"
-    printf "   ${CYAN}%-18s${NC} %s\n" "--caddy" "Use Caddy as web server (default)"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--nginx" "Use Nginx as web server"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--caddy" "Use Caddy as web server (default)"
     echo
     echo -e "${WHITE}Nginx Options:${NC}"
-    printf "   ${CYAN}%-18s${NC} %s\n" "--socket" "Use Unix socket (default)"
-    printf "   ${CYAN}%-18s${NC} %s\n" "--tcp" "Use TCP port instead of socket"
-    printf "   ${CYAN}%-18s${NC} %s\n" "--acme-port <port>" "Custom port for ACME TLS-ALPN"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--socket" "Use Unix socket (default)"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--tcp" "Use TCP port instead of socket"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--acme-port <port>" "Custom port for ACME TLS-ALPN"
+    echo
+    echo -e "${WHITE}Force Install Options:${NC}"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--force, -f" "Skip DNS validation and prompts"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--domain <domain>" "Domain for installation"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--port <port>" "HTTPS port (default: 9443)"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--template <1-11>" "Template number to install"
+    echo
+    echo -e "${WHITE}Manual SSL Certificate:${NC}"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--ssl-cert <path>" "Path to fullchain certificate"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--ssl-key <path>" "Path to private key"
     echo
     echo -e "${WHITE}Commands:${NC}"
     printf "   ${CYAN}%-12s${NC} %s\n" "install" "🚀 Install $server_name for Reality masking"
@@ -3772,19 +4207,25 @@ show_help() {
     printf "   ${CYAN}%-12s${NC} %s\n" "logs-size" "📊 Show log sizes"
     printf "   ${CYAN}%-12s${NC} %s\n" "clean-logs" "🧹 Clean all logs"
     printf "   ${CYAN}%-12s${NC} %s\n" "edit" "✏️  Edit configuration files"
-    printf "   ${CYAN}%-12s${NC} %s\n" "uninstall" "🗑️  Remove Caddy installation"
+    printf "   ${CYAN}%-12s${NC} %s\n" "uninstall" "🗑️  Remove installation"
     printf "   ${CYAN}%-12s${NC} %s\n" "template" "🎨 Manage website templates"
     printf "   ${CYAN}%-12s${NC} %s\n" "renew-ssl" "🔐 Renew SSL certificate (Nginx)"
     printf "   ${CYAN}%-12s${NC} %s\n" "menu" "📋 Show interactive menu"
     printf "   ${CYAN}%-12s${NC} %s\n" "update" "🔄 Check for script updates"
     echo
-    echo -e "${WHITE}Examples:${NC}"
-    echo -e "  ${GRAY}$APP_NAME install${NC}                    # Caddy (default)"
-    echo -e "  ${GRAY}$APP_NAME --nginx install${NC}            # Nginx with Unix socket"
-    echo -e "  ${GRAY}$APP_NAME --nginx --tcp install${NC}      # Nginx with TCP port"
-    echo -e "  ${GRAY}$APP_NAME status${NC}"
-    echo -e "  ${GRAY}$APP_NAME logs${NC}"
-    echo -e "  ${GRAY}$APP_NAME renew-ssl${NC}"
+    echo -e "${WHITE}One-liner Install Examples:${NC}"
+    echo -e "  ${GRAY}# Nginx with auto ACME (interactive)${NC}"
+    echo -e "  ${CYAN}$APP_NAME --nginx install${NC}"
+    echo
+    echo -e "  ${GRAY}# Force install with domain (skip prompts)${NC}"
+    echo -e "  ${CYAN}$APP_NAME --nginx --force --domain reality.example.com install${NC}"
+    echo
+    echo -e "  ${GRAY}# Force install with custom port and template${NC}"
+    echo -e "  ${CYAN}$APP_NAME --nginx --force --domain reality.example.com --port 8443 --template 5 install${NC}"
+    echo
+    echo -e "  ${GRAY}# Install with manual wildcard certificate${NC}"
+    echo -e "  ${CYAN}$APP_NAME --nginx --force --domain reality.example.com \\${NC}"
+    echo -e "  ${CYAN}    --ssl-cert /path/to/fullchain.crt --ssl-key /path/to/private.key install${NC}"
     echo
     echo -e "${WHITE}Xray Reality Configuration:${NC}"
     echo -e "  ${GRAY}Socket mode (default):  \"target\": \"/dev/shm/nginx.sock\", \"xver\": 1${NC}"

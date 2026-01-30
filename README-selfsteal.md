@@ -105,6 +105,45 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ --nginx --acme-port 15443 install
 ```
 
+### 🚀 Однострочная установка (Force Mode)
+
+Для автоматизированных деплоев и CI/CD можно использовать `--force` режим, который пропускает все интерактивные запросы:
+
+**Базовая force-установка:**
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ --nginx --force --domain reality.example.com install
+```
+
+**С кастомным портом и шаблоном:**
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ --nginx --force --domain reality.example.com --port 8443 --template 5 install
+```
+
+**С ручным wildcard-сертификатом:**
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ --nginx --force --domain reality.example.com \
+    --ssl-cert /path/to/fullchain.crt --ssl-key /path/to/private.key install
+```
+
+**Caddy с ручным сертификатом:**
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ --caddy --force --domain reality.example.com \
+    --ssl-cert /path/to/fullchain.crt --ssl-key /path/to/private.key install
+```
+
+#### Опции Force Mode
+
+| Опция | Описание |
+|-------|----------|
+| `--force`, `-f` | Пропустить проверку DNS и все интерактивные запросы |
+| `--domain <domain>` | Домен для установки (обязательно с --force) |
+| `--port <port>` | Порт HTTPS (по умолчанию: 9443) |
+| `--template <1-11>` | Номер шаблона (иначе случайный) |
+| `--ssl-cert <path>` | Путь к файлу сертификата (fullchain) |
+| `--ssl-key <path>` | Путь к приватному ключу |
+
+> 💡 При использовании `--force` без `--ssl-cert` скрипт попытается получить сертификат через ACME. Если ACME не сработает — автоматически создаст self-signed сертификат.
+
 ### Ручная установка
 
 ```bash
@@ -170,6 +209,7 @@ selfsteal --nginx --acme-port 12345 install
 | Функция | Caddy | Nginx |
 |---------|-------|-------|
 | SSL сертификаты | Автоматически (внутренние) | ACME (Let's Encrypt) с автофолбэком портов |
+| **Ручные сертификаты** | ✅ Поддерживается (`--ssl-cert`) | ✅ Поддерживается (`--ssl-cert`) |
 | Конфигурация | Caddyfile | nginx.conf + conf.d/ |
 | Путь установки | `/opt/caddy` | `/opt/nginx-selfsteal` |
 | **Режим подключения** | TCP порт (127.0.0.1:9443) | **Unix Socket** (по умолчанию) или TCP |
