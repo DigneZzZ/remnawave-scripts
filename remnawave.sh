@@ -1073,18 +1073,9 @@ schedule_menu() {
         case "$choice" in
             1) schedule_setup_menu ;;
             2) schedule_toggle ;;
-            3) 
-                schedule_test_backup
-                read -p "Press Enter to continue..."
-                ;;
-            4) 
-                schedule_test_telegram
-                read -p "Press Enter to continue..."
-                ;;
-            5) 
-                schedule_status
-                read -p "Press Enter to continue..."
-                ;;
+            3) schedule_test_backup ;;
+            4) schedule_test_telegram ;;
+            5) schedule_status ;;
             6) schedule_show_logs ;;
             7) schedule_cleanup ;;
             8) schedule_run_backup ;;
