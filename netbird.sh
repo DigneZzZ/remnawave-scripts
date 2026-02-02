@@ -18,6 +18,9 @@ NC='\033[0m' # No Color
 # Setup key (required, from CLI or env var)
 SETUP_KEY="${NETBIRD_SETUP_KEY:-}"
 
+# SSH access option
+ENABLE_SSH=false
+
 # Disable colors for ansible/non-interactive mode
 disable_colors() {
     RED=''
@@ -110,10 +113,17 @@ install_netbird() {
 
 connect_netbird() {
     local setup_key="$1"
+    local ssh_opts=""
+    
+    # Add SSH options if enabled
+    if [[ "$ENABLE_SSH" == "true" ]]; then
+        ssh_opts="--allow-server-ssh --enable-ssh-root"
+        print_info "Включен SSH доступ между серверами"
+    fi
     
     print_info "Подключение к NetBird с setup-key..."
     
-    if netbird up --setup-key "$setup_key"; then
+    if netbird up --setup-key "$setup_key" $ssh_opts; then
         print_success "NetBird успешно подключен!"
         echo ""
         print_info "Статус подключения:"
@@ -170,6 +180,7 @@ show_help() {
     echo ""
     echo "Опции:"
     echo "  --key, -k KEY          Setup key для подключения (ОБЯЗАТЕЛЬНО для install/connect/init)"
+    echo "  --ssh                  Включить SSH доступ между серверами (--allow-server-ssh --enable-ssh-root)"
     echo "  --quiet, -q            Тихий режим (минимум вывода)"
     echo ""
     echo "Переменные окружения:"
@@ -177,8 +188,10 @@ show_help() {
     echo ""
     echo "Примеры:"
     echo "  $0 init --key YOUR-SETUP-KEY              # Автоустановка (cloud-init)"
+    echo "  $0 init --key YOUR-KEY --ssh             # Автоустановка с SSH доступом"
     echo "  $0 menu                                   # Интерактивное меню"
     echo "  $0 install --key YOUR-SETUP-KEY           # CLI установка"
+    echo "  $0 install --key YOUR-KEY --ssh           # CLI установка с SSH"
     echo "  $0 ansible install --key YOUR-KEY         # Ansible режим"
     echo ""
     echo "Cloud-init / user-data:"
@@ -223,6 +236,10 @@ parse_args() {
             --key|-k)
                 SETUP_KEY="$2"
                 shift 2
+                ;;
+            --ssh)
+                ENABLE_SSH=true
+                shift
                 ;;
             --quiet|-q)
                 QUIET_MODE=true
@@ -380,9 +397,19 @@ run_init_mode() {
         exit 1
     fi
     
+    # Build connect command with SSH options if enabled
+    local ssh_opts=""
+    if [[ "$ENABLE_SSH" == "true" ]]; then
+        ssh_opts="--allow-server-ssh --enable-ssh-root"
+    fi
+    
     # Connect
-    if netbird up --setup-key "$SETUP_KEY" >/dev/null 2>&1; then
-        echo "OK: NetBird installed and connected"
+    if netbird up --setup-key "$SETUP_KEY" $ssh_opts >/dev/null 2>&1; then
+        if [[ "$ENABLE_SSH" == "true" ]]; then
+            echo "OK: NetBird installed and connected with SSH access"
+        else
+            echo "OK: NetBird installed and connected"
+        fi
         exit 0
     else
         echo "FAILED: NetBird connection failed" >&2

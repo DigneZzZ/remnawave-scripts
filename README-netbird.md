@@ -63,8 +63,14 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 # Auto-install for cloud-init (silent)
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456
 
+# Auto-install with SSH access between servers
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
+
 # CLI install with output
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456
+
+# CLI install with SSH access
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --ssh
 
 # Using environment variable
 NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init
@@ -73,6 +79,20 @@ NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/re
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
 ```
 
+### SSH Access Between Servers
+
+Use `--ssh` flag to enable SSH access between NetBird peers:
+
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key YOUR-KEY --ssh
+```
+
+This enables:
+- `--allow-server-ssh` — allows incoming SSH connections from other NetBird peers
+- `--enable-ssh-root` — enables root SSH access
+
+> ⚠️ **Note:** You also need to create an SSH Access Policy in your NetBird dashboard (starting from v0.61.0)
+
 ### Cloud-Init / User-Data
 
 Add to your cloud-init configuration:
@@ -80,14 +100,14 @@ Add to your cloud-init configuration:
 ```yaml
 #cloud-config
 runcmd:
-  - bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
+  - bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY --ssh
 ```
 
 Or in user-data script:
 
 ```bash
 #!/bin/bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY --ssh
 ```
 
 ### Ansible Integration
@@ -144,7 +164,8 @@ netbird_setup_key: "YOUR-SETUP-KEY-HERE"
 - 🔧 Интерактивное меню (`menu`)
 - 🤖 Режим для Ansible (без цветов, минимум вывода)
 - 🔑 Setup key через CLI или переменную окружения
-- 📦 Поддержка Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
+- � SSH доступ между серверами (`--ssh`)
+- �📦 Поддержка Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
 
 ### Быстрый старт
 
@@ -192,8 +213,14 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 # Автоустановка для cloud-init (тихий режим)
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456
 
+# Автоустановка с SSH доступом между серверами
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
+
 # CLI установка с выводом
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456
+
+# CLI установка с SSH доступом
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --ssh
 
 # Через переменную окружения
 NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init
@@ -202,6 +229,20 @@ NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/re
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
 ```
 
+### SSH доступ между серверами
+
+Используйте флаг `--ssh` для включения SSH доступа между NetBird пирами:
+
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key YOUR-KEY --ssh
+```
+
+Это включает:
+- `--allow-server-ssh` — разрешает входящие SSH соединения от других NetBird пиров
+- `--enable-ssh-root` — включает root SSH доступ
+
+> ⚠️ **Важно:** Вам также нужно создать SSH Access Policy в дашборде NetBird (начиная с v0.61.0)
+
 ### Cloud-Init / User-Data
 
 Добавьте в конфигурацию cloud-init:
@@ -209,14 +250,14 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 ```yaml
 #cloud-config
 runcmd:
-  - bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
+  - bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY --ssh
 ```
 
 Или в скрипт user-data:
 
 ```bash
 #!/bin/bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY --ssh
 ```
 
 ### Интеграция с Ansible
