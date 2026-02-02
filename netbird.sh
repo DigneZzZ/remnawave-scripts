@@ -99,6 +99,86 @@ install_dependencies() {
     print_success "Зависимости установлены"
 }
 
+# Check and configure UFW firewall for NetBird
+check_firewall() {
+    # NetBird uses WireGuard on UDP port 51820 by default
+    local NETBIRD_PORT=51820
+    
+    # Check if UFW is installed and active
+    if command -v ufw &>/dev/null; then
+        local ufw_status
+        ufw_status=$(ufw status 2>/dev/null | head -1)
+        
+        if [[ "$ufw_status" == *"active"* ]]; then
+            print_info "UFW файрвол активен, проверяю порт $NETBIRD_PORT/udp..."
+            
+            # Check if port is already allowed
+            if ufw status | grep -q "$NETBIRD_PORT/udp"; then
+                print_success "Порт $NETBIRD_PORT/udp уже открыт в UFW"
+            else
+                print_warning "Порт $NETBIRD_PORT/udp не открыт в UFW"
+                
+                # In quiet mode (init/ansible), auto-open port
+                if [[ "$QUIET_MODE" == "true" ]]; then
+                    if ufw allow $NETBIRD_PORT/udp >/dev/null 2>&1; then
+                        print_success "Порт $NETBIRD_PORT/udp открыт в UFW"
+                    else
+                        print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
+                    fi
+                else
+                    # Interactive mode - ask user
+                    echo ""
+                    read -rp "Открыть порт $NETBIRD_PORT/udp в UFW? (Y/n): " open_port
+                    if [[ ! "$open_port" =~ ^[Nn]$ ]]; then
+                        if ufw allow $NETBIRD_PORT/udp >/dev/null 2>&1; then
+                            print_success "Порт $NETBIRD_PORT/udp открыт в UFW"
+                        else
+                            print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
+                        fi
+                    else
+                        print_warning "Порт не открыт. NetBird может не работать корректно!"
+                    fi
+                fi
+            fi
+        else
+            print_info "UFW не активен, пропускаю настройку файрвола"
+        fi
+    # Check for firewalld (CentOS/RHEL/Fedora)
+    elif command -v firewall-cmd &>/dev/null; then
+        if systemctl is-active --quiet firewalld; then
+            print_info "Firewalld активен, проверяю порт $NETBIRD_PORT/udp..."
+            
+            if firewall-cmd --list-ports 2>/dev/null | grep -q "$NETBIRD_PORT/udp"; then
+                print_success "Порт $NETBIRD_PORT/udp уже открыт в firewalld"
+            else
+                print_warning "Порт $NETBIRD_PORT/udp не открыт в firewalld"
+                
+                if [[ "$QUIET_MODE" == "true" ]]; then
+                    if firewall-cmd --permanent --add-port=$NETBIRD_PORT/udp >/dev/null 2>&1 && \
+                       firewall-cmd --reload >/dev/null 2>&1; then
+                        print_success "Порт $NETBIRD_PORT/udp открыт в firewalld"
+                    else
+                        print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
+                    fi
+                else
+                    echo ""
+                    read -rp "Открыть порт $NETBIRD_PORT/udp в firewalld? (Y/n): " open_port
+                    if [[ ! "$open_port" =~ ^[Nn]$ ]]; then
+                        if firewall-cmd --permanent --add-port=$NETBIRD_PORT/udp >/dev/null 2>&1 && \
+                           firewall-cmd --reload >/dev/null 2>&1; then
+                            print_success "Порт $NETBIRD_PORT/udp открыт в firewalld"
+                        else
+                            print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
+                        fi
+                    else
+                        print_warning "Порт не открыт. NetBird может не работать корректно!"
+                    fi
+                fi
+            fi
+        fi
+    fi
+}
+
 install_netbird() {
     print_info "Установка NetBird..."
     
@@ -397,6 +477,9 @@ run_init_mode() {
         exit 1
     fi
     
+    # Check and configure firewall (silent mode)
+    check_firewall
+    
     # Build connect command with SSH options if enabled
     local ssh_opts=""
     if [[ "$ENABLE_SSH" == "true" ]]; then
@@ -437,6 +520,7 @@ run_cli_mode() {
             check_root
             check_os
             install_dependencies
+            check_firewall
             install_netbird
             connect_netbird "$SETUP_KEY"
             ;;
@@ -485,6 +569,7 @@ run_ansible_mode() {
             check_root
             check_os
             install_dependencies
+            check_firewall
             if install_netbird; then
                 if connect_netbird "$SETUP_KEY"; then
                     echo "OK: NetBird installed and connected"
