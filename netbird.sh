@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# VERSION=1.1.0
-SCRIPT_VERSION="1.1.0"
+# VERSION=1.4.0
+SCRIPT_VERSION="1.4.0"
 
-# Mode: cli (default), ansible (quiet, no colors), init (interactive menu)
+# Mode: cli (default), ansible (quiet, no colors), init (auto-install)
 RUN_MODE="cli"
 QUIET_MODE=false
 
@@ -20,6 +20,12 @@ SETUP_KEY="${NETBIRD_SETUP_KEY:-}"
 
 # SSH access option
 ENABLE_SSH=false
+
+# Force mode - auto-accept all prompts
+FORCE_MODE=false
+
+# Log file (optional)
+LOG_FILE=""
 
 # Disable colors for ansible/non-interactive mode
 disable_colors() {
@@ -44,20 +50,98 @@ print_banner() {
 print_success() {
     [[ "$QUIET_MODE" == "true" ]] && return
     echo -e "${GREEN}✓ $1${NC}"
+    log_message "OK: $1"
 }
 
 print_error() {
     echo -e "${RED}✗ $1${NC}" >&2
+    log_message "ERROR: $1"
 }
 
 print_info() {
     [[ "$QUIET_MODE" == "true" ]] && return
     echo -e "${BLUE}ℹ $1${NC}"
+    log_message "INFO: $1"
 }
 
 print_warning() {
     [[ "$QUIET_MODE" == "true" ]] && return
     echo -e "${YELLOW}⚠ $1${NC}"
+    log_message "WARN: $1"
+}
+
+# Logging function
+log_message() {
+    [[ -z "$LOG_FILE" ]] && return
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Show version
+show_version() {
+    echo "NetBird Installer v${SCRIPT_VERSION}"
+    echo "https://github.com/DigneZzZ/remnawave-scripts"
+}
+
+# Check if NetBird is already installed
+is_netbird_installed() {
+    command -v netbird &>/dev/null
+}
+
+# Check if NetBird is running
+is_netbird_running() {
+    netbird status 2>/dev/null | grep -q "Connected\|Connecting"
+}
+
+# Check if TUN device is available (required for WireGuard)
+check_tun_device() {
+    if [[ ! -c /dev/net/tun ]]; then
+        print_error "TUN устройство (/dev/net/tun) не найдено!"
+        print_error "NetBird требует TUN для работы WireGuard."
+        echo ""
+        echo -e "${YELLOW}Возможные решения:${NC}"
+        echo "  1. Если это VPS/контейнер - включите TUN в панели управления"
+        echo "  2. Для OpenVZ/LXC контейнеров попросите хостера включить TUN"
+        echo "  3. На обычном сервере выполните:"
+        echo "     mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun"
+        echo "  4. Загрузите модуль ядра: modprobe tun"
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+# Validate setup key format (UUID-like)
+validate_setup_key() {
+    local key="$1"
+    # Check if key looks like UUID (8-4-4-4-12 or similar formats)
+    if [[ ! "$key" =~ ^[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}$ ]] && \
+       [[ ! "$key" =~ ^[A-Za-z0-9-]{20,}$ ]]; then
+        print_warning "Формат setup-key выглядит необычно. Продолжаю..."
+    fi
+}
+
+# Verify connection after install
+verify_connection() {
+    print_info "Проверка подключения..."
+    local retries=5
+    local wait_time=2
+    
+    for ((i=1; i<=retries; i++)); do
+        if netbird status 2>/dev/null | grep -q "Connected"; then
+            print_success "NetBird успешно подключен!"
+            # Show peer IP
+            local peer_ip
+            peer_ip=$(netbird status 2>/dev/null | grep -oE 'NetBird IP: [0-9.]+' | cut -d' ' -f3)
+            if [[ -n "$peer_ip" ]]; then
+                print_info "NetBird IP: $peer_ip"
+            fi
+            return 0
+        fi
+        sleep $wait_time
+    done
+    
+    print_warning "Подключение еще устанавливается. Проверьте 'netbird status' позже."
+    return 1
 }
 
 check_root() {
@@ -103,6 +187,7 @@ install_dependencies() {
 check_firewall() {
     # NetBird uses WireGuard on UDP port 51820 by default
     local NETBIRD_PORT=51820
+    local auto_open=$([[ "$QUIET_MODE" == "true" || "$FORCE_MODE" == "true" ]] && echo "true" || echo "false")
     
     # Check if UFW is installed and active
     if command -v ufw &>/dev/null; then
@@ -118,23 +203,13 @@ check_firewall() {
             else
                 print_warning "Порт $NETBIRD_PORT/udp не открыт в UFW"
                 
-                # In quiet mode (init/ansible), auto-open port
-                if [[ "$QUIET_MODE" == "true" ]]; then
-                    if ufw allow $NETBIRD_PORT/udp >/dev/null 2>&1; then
-                        print_success "Порт $NETBIRD_PORT/udp открыт в UFW"
-                    else
-                        print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
-                    fi
+                if [[ "$auto_open" == "true" ]]; then
+                    open_ufw_port $NETBIRD_PORT
                 else
-                    # Interactive mode - ask user
                     echo ""
                     read -rp "Открыть порт $NETBIRD_PORT/udp в UFW? (Y/n): " open_port
                     if [[ ! "$open_port" =~ ^[Nn]$ ]]; then
-                        if ufw allow $NETBIRD_PORT/udp >/dev/null 2>&1; then
-                            print_success "Порт $NETBIRD_PORT/udp открыт в UFW"
-                        else
-                            print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
-                        fi
+                        open_ufw_port $NETBIRD_PORT
                     else
                         print_warning "Порт не открыт. NetBird может не работать корректно!"
                     fi
@@ -153,23 +228,13 @@ check_firewall() {
             else
                 print_warning "Порт $NETBIRD_PORT/udp не открыт в firewalld"
                 
-                if [[ "$QUIET_MODE" == "true" ]]; then
-                    if firewall-cmd --permanent --add-port=$NETBIRD_PORT/udp >/dev/null 2>&1 && \
-                       firewall-cmd --reload >/dev/null 2>&1; then
-                        print_success "Порт $NETBIRD_PORT/udp открыт в firewalld"
-                    else
-                        print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
-                    fi
+                if [[ "$auto_open" == "true" ]]; then
+                    open_firewalld_port $NETBIRD_PORT
                 else
                     echo ""
                     read -rp "Открыть порт $NETBIRD_PORT/udp в firewalld? (Y/n): " open_port
                     if [[ ! "$open_port" =~ ^[Nn]$ ]]; then
-                        if firewall-cmd --permanent --add-port=$NETBIRD_PORT/udp >/dev/null 2>&1 && \
-                           firewall-cmd --reload >/dev/null 2>&1; then
-                            print_success "Порт $NETBIRD_PORT/udp открыт в firewalld"
-                        else
-                            print_error "Не удалось открыть порт $NETBIRD_PORT/udp"
-                        fi
+                        open_firewalld_port $NETBIRD_PORT
                     else
                         print_warning "Порт не открыт. NetBird может не работать корректно!"
                     fi
@@ -179,7 +244,48 @@ check_firewall() {
     fi
 }
 
+# Helper: open UFW port
+open_ufw_port() {
+    local port=$1
+    if ufw allow $port/udp >/dev/null 2>&1; then
+        print_success "Порт $port/udp открыт в UFW"
+    else
+        print_error "Не удалось открыть порт $port/udp"
+    fi
+}
+
+# Helper: open firewalld port
+open_firewalld_port() {
+    local port=$1
+    if firewall-cmd --permanent --add-port=$port/udp >/dev/null 2>&1 && \
+       firewall-cmd --reload >/dev/null 2>&1; then
+        print_success "Порт $port/udp открыт в firewalld"
+    else
+        print_error "Не удалось открыть порт $port/udp"
+    fi
+}
+
 install_netbird() {
+    # Check TUN device availability first
+    if ! check_tun_device; then
+        return 1
+    fi
+    
+    # Check if already installed
+    if is_netbird_installed; then
+        local current_version
+        current_version=$(netbird version 2>/dev/null | head -1 || echo "unknown")
+        print_warning "NetBird уже установлен (версия: $current_version)"
+        
+        if [[ "$FORCE_MODE" != "true" && "$QUIET_MODE" != "true" ]]; then
+            read -rp "Переустановить? (y/N): " reinstall
+            if [[ ! "$reinstall" =~ ^[Yy]$ ]]; then
+                print_info "Пропускаю установку, используется существующий NetBird"
+                return 0
+            fi
+        fi
+    fi
+    
     print_info "Установка NetBird..."
     
     if curl -fsSL https://pkgs.netbird.io/install.sh | sh; then
@@ -191,9 +297,51 @@ install_netbird() {
     fi
 }
 
+# Update NetBird to latest version
+update_netbird() {
+    if ! is_netbird_installed; then
+        print_error "NetBird не установлен. Используйте 'install' для установки."
+        return 1
+    fi
+    
+    local current_version
+    current_version=$(netbird version 2>/dev/null | head -1 || echo "unknown")
+    print_info "Текущая версия: $current_version"
+    print_info "Обновление NetBird до последней версии..."
+    
+    # Stop NetBird before update
+    netbird down 2>/dev/null
+    
+    # Reinstall (official script handles updates)
+    if curl -fsSL https://pkgs.netbird.io/install.sh | sh; then
+        local new_version
+        new_version=$(netbird version 2>/dev/null | head -1 || echo "unknown")
+        print_success "NetBird обновлен до версии: $new_version"
+        
+        # Restart if was running
+        if [[ -n "$SETUP_KEY" ]]; then
+            connect_netbird "$SETUP_KEY"
+        else
+            print_info "Запустите 'netbird up' для подключения"
+        fi
+        return 0
+    else
+        print_error "Ошибка при обновлении NetBird"
+        return 1
+    fi
+}
+
 connect_netbird() {
     local setup_key="$1"
     local ssh_opts=""
+    
+    # Check TUN device availability
+    if ! check_tun_device; then
+        return 1
+    fi
+    
+    # Validate setup key format
+    validate_setup_key "$setup_key"
     
     # Add SSH options if enabled
     if [[ "$ENABLE_SSH" == "true" ]]; then
@@ -204,10 +352,8 @@ connect_netbird() {
     print_info "Подключение к NetBird с setup-key..."
     
     if netbird up --setup-key "$setup_key" $ssh_opts; then
-        print_success "NetBird успешно подключен!"
-        echo ""
-        print_info "Статус подключения:"
-        netbird status
+        # Verify connection
+        verify_connection
         return 0
     else
         print_error "Ошибка при подключении к NetBird"
@@ -252,6 +398,7 @@ show_help() {
     echo ""
     echo "Команды:"
     echo "  install --key KEY      Установить и подключить NetBird (ключ обязателен!)"
+    echo "  update                 Обновить NetBird до последней версии"
     echo "  connect --key KEY      Подключить существующий NetBird к сети"
     echo "  disconnect             Отключиться от сети NetBird"
     echo "  status                 Показать статус подключения"
@@ -260,26 +407,25 @@ show_help() {
     echo ""
     echo "Опции:"
     echo "  --key, -k KEY          Setup key для подключения (ОБЯЗАТЕЛЬНО для install/connect/init)"
-    echo "  --ssh                  Включить SSH доступ между серверами (--allow-server-ssh --enable-ssh-root)"
+    echo "  --ssh                  Включить SSH доступ между серверами"
+    echo "  --force, -f            Автоматически принимать все запросы (порты, переустановка)"
     echo "  --quiet, -q            Тихий режим (минимум вывода)"
+    echo "  --log FILE             Записывать лог в файл"
+    echo "  --version, -v          Показать версию скрипта"
     echo ""
     echo "Переменные окружения:"
     echo "  NETBIRD_SETUP_KEY      Setup key (альтернатива --key)"
     echo ""
     echo "Примеры:"
-    echo "  $0 init --key YOUR-SETUP-KEY              # Автоустановка (cloud-init)"
-    echo "  $0 init --key YOUR-KEY --ssh             # Автоустановка с SSH доступом"
+    echo "  $0 install --key YOUR-KEY                 # Установка"
+    echo "  $0 install --key YOUR-KEY --ssh -f        # Установка с SSH и auto-accept"
+    echo "  $0 update                                 # Обновление"
+    echo "  $0 init --key YOUR-KEY --ssh              # Cloud-init"
     echo "  $0 menu                                   # Интерактивное меню"
-    echo "  $0 install --key YOUR-SETUP-KEY           # CLI установка"
-    echo "  $0 install --key YOUR-KEY --ssh           # CLI установка с SSH"
-    echo "  $0 ansible install --key YOUR-KEY         # Ansible режим"
+    echo "  $0 --version                              # Версия"
     echo ""
     echo "Cloud-init / user-data:"
-    echo "  bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-KEY"
-    echo ""
-    echo "Ansible playbook:"
-    echo "  - name: Install NetBird"
-    echo "    shell: bash <(curl -Ls .../netbird.sh) ansible install --key {{ netbird_key }}"
+    echo "  bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-KEY --ssh"
     echo ""
 }
 
@@ -308,7 +454,7 @@ parse_args() {
                 shift
                 ;;
             # Commands
-            install|connect|disconnect|status|uninstall|help)
+            install|update|connect|disconnect|status|uninstall|help)
                 COMMAND="$1"
                 shift
                 ;;
@@ -321,9 +467,21 @@ parse_args() {
                 ENABLE_SSH=true
                 shift
                 ;;
+            --force|-f)
+                FORCE_MODE=true
+                shift
+                ;;
             --quiet|-q)
                 QUIET_MODE=true
                 shift
+                ;;
+            --log)
+                LOG_FILE="$2"
+                shift 2
+                ;;
+            --version|-v)
+                show_version
+                exit 0
                 ;;
             *)
                 print_error "Неизвестный аргумент: $1"
@@ -352,10 +510,11 @@ show_menu() {
     echo -e "${CYAN}Выберите действие:${NC}"
     echo ""
     echo -e "  ${GREEN}1)${NC} Установить NetBird"
-    echo -e "  ${GREEN}2)${NC} Подключить к сети"
-    echo -e "  ${GREEN}3)${NC} Отключить от сети"
-    echo -e "  ${GREEN}4)${NC} Показать статус"
-    echo -e "  ${GREEN}5)${NC} Удалить NetBird"
+    echo -e "  ${GREEN}2)${NC} Обновить NetBird"
+    echo -e "  ${GREEN}3)${NC} Подключить к сети"
+    echo -e "  ${GREEN}4)${NC} Отключить от сети"
+    echo -e "  ${GREEN}5)${NC} Показать статус"
+    echo -e "  ${GREEN}6)${NC} Удалить NetBird"
     echo -e "  ${RED}0)${NC} Выход"
     echo ""
 }
@@ -385,7 +544,7 @@ run_interactive_menu() {
     
     while true; do
         show_menu
-        read -rp "Ваш выбор [0-5]: " choice
+        read -rp "Ваш выбор [0-6]: " choice
         echo ""
         
         case $choice in
@@ -399,25 +558,30 @@ run_interactive_menu() {
                 read -rp "Нажмите Enter для продолжения..."
                 ;;
             2)
+                update_netbird
+                echo ""
+                read -rp "Нажмите Enter для продолжения..."
+                ;;
+            3)
                 prompt_setup_key
                 echo ""
                 connect_netbird "$SETUP_KEY"
                 echo ""
                 read -rp "Нажмите Enter для продолжения..."
                 ;;
-            3)
+            4)
                 print_info "Отключение от NetBird..."
                 netbird down
                 print_success "Отключено"
                 echo ""
                 read -rp "Нажмите Enter для продолжения..."
                 ;;
-            4)
+            5)
                 show_status
                 echo ""
                 read -rp "Нажмите Enter для продолжения..."
                 ;;
-            5)
+            6)
                 echo -e "${YELLOW}Вы уверены? (y/N):${NC} "
                 read -r confirm
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -524,6 +688,12 @@ run_cli_mode() {
             install_netbird
             connect_netbird "$SETUP_KEY"
             ;;
+        update)
+            print_banner
+            check_root
+            check_os
+            update_netbird
+            ;;
         connect)
             validate_setup_key
             print_banner
@@ -580,6 +750,17 @@ run_ansible_mode() {
                 fi
             else
                 echo "FAILED: NetBird installation failed" >&2
+                exit 1
+            fi
+            ;;
+        update)
+            check_root
+            check_os
+            if update_netbird; then
+                echo "OK: NetBird updated"
+                exit 0
+            else
+                echo "FAILED: Update failed" >&2
                 exit 1
             fi
             ;;

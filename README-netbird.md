@@ -15,6 +15,10 @@ A simple script for quick NetBird installation and connection on Linux servers. 
 - 🔧 Interactive menu mode (`menu`)
 - 🤖 Ansible-friendly mode (no colors, minimal output)
 - 🔑 Setup key via CLI or environment variable
+- 🔄 Update command for easy upgrades
+- 📝 Optional logging to file
+- 🔐 SSH access between servers (`--ssh`)
+- 🔥 Auto-firewall configuration (UFW/firewalld)
 - 📦 Supports Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
 
 ### Quick Start
@@ -51,11 +55,23 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 | Command | Description |
 |---------|-------------|
 | `install --key KEY` | Install NetBird and connect (key required!) |
+| `update` | Update NetBird to latest version |
 | `connect --key KEY` | Connect existing NetBird to network |
 | `disconnect` | Disconnect from NetBird network |
 | `status` | Show connection status |
 | `uninstall` | Remove NetBird |
 | `help` | Show help |
+
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `--key, -k KEY` | Setup key (required for install/connect/init) |
+| `--ssh` | Enable SSH access between servers |
+| `--force, -f` | Auto-accept all prompts (firewall, reinstall) |
+| `--quiet, -q` | Quiet mode (minimal output) |
+| `--log FILE` | Write log to file |
+| `--version, -v` | Show script version |
 
 #### Examples
 
@@ -66,14 +82,17 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 # Auto-install with SSH access between servers
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
 
-# CLI install with output
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456
+# CLI install with auto-accept (no prompts)
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --force
 
-# CLI install with SSH access
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --ssh
+# Update to latest version
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) update
 
-# Using environment variable
-NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init
+# Install with logging
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key KEY --log /var/log/netbird-install.log
+
+# Check version
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) --version
 
 # Check status
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
@@ -164,8 +183,13 @@ netbird_setup_key: "YOUR-SETUP-KEY-HERE"
 - 🔧 Интерактивное меню (`menu`)
 - 🤖 Режим для Ansible (без цветов, минимум вывода)
 - 🔑 Setup key через CLI или переменную окружения
-- � SSH доступ между серверами (`--ssh`)
-- �📦 Поддержка Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
+- 🔐 SSH доступ между серверами (`--ssh`)
+- 📦 Поддержка Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
+- 🔄 Команда обновления (`update`)
+- 📝 Логирование в файл (`--log FILE`)
+- ✅ Валидация формата setup-key
+- 🔍 Проверка подключения после установки
+- ⚡ Режим без подтверждений (`--force/-f`)
 
 ### Быстрый старт
 
@@ -201,11 +225,23 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 | Команда | Описание |
 |---------|----------|
 | `install --key KEY` | Установить NetBird и подключить (ключ обязателен!) |
+| `update` | Обновить NetBird до последней версии |
 | `connect --key KEY` | Подключить существующий NetBird к сети |
 | `disconnect` | Отключиться от сети NetBird |
 | `status` | Показать статус подключения |
 | `uninstall` | Удалить NetBird |
 | `help` | Показать справку |
+
+#### Опции
+
+| Опция | Описание |
+|-------|----------|
+| `--key KEY`, `-k KEY` | Setup key для подключения (обязательно для install/connect/init) |
+| `--ssh` | Включить SSH доступ между NetBird пирами |
+| `--force`, `-f` | Автоподтверждение (без интерактивных запросов) |
+| `--quiet`, `-q` | Минимальный вывод |
+| `--log FILE` | Записывать лог в указанный файл |
+| `--version`, `-v` | Показать версию скрипта |
 
 #### Примеры
 
@@ -216,14 +252,17 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 # Автоустановка с SSH доступом между серверами
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
 
-# CLI установка с выводом
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456
+# CLI установка с автоподтверждением (без запросов)
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --force
 
-# CLI установка с SSH доступом
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --ssh
+# Обновление до последней версии
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) update
 
-# Через переменную окружения
-NETBIRD_SETUP_KEY="ABC123-DEF456" bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init
+# Установка с логированием
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key KEY --log /var/log/netbird-install.log
+
+# Проверка версии скрипта
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) --version
 
 # Проверка статуса
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
