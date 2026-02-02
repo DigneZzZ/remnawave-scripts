@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-5.4.5-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-5.8.0-blue.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Installer-Remnawave-brightgreen)](#-remnawave-panel-installer)
 [![RemnaNode](https://img.shields.io/badge/Installer-RemnaNode-lightgrey)](#-remnanode-installer)
@@ -132,6 +132,13 @@ A comprehensive enterprise-grade Bash script to install and manage the [Remnawav
 * New commands: `subpage`, `subpage-token`, `install-subpage`
 * Interactive subscription page management menu
 
+**🌐 Standalone Subscription-Page (v5.8.0+)**
+* Install subscription-page on a **separate server** without the main panel
+* Connect to remote Remnawave panel via API
+* Automatic Caddy installation for SSL
+* Limited management menu for standalone mode
+* Commands: `install-subpage-standalone`, `caddy-standalone`
+
 ---
 
 ### 📦 Quick Start
@@ -143,6 +150,33 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 # Install only the management script
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-script --name remnawave
 ```
+
+---
+
+### 🌐 Standalone Subscription-Page
+
+Install subscription-page on a **separate server** (e.g., CDN edge location) connecting to your main Remnawave panel via API.
+
+```bash
+# Install standalone subscription-page with Caddy
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone --with-caddy
+
+# Or install without Caddy (configure your own reverse proxy)
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone
+```
+
+**What it does:**
+1. Asks for your main panel URL (e.g., `https://panel.domain.com`)
+2. Tests connection to the panel
+3. Asks for API token (can be configured later)
+4. Asks for subscription-page domain
+5. Generates minimal `docker-compose.yml` (no database dependencies)
+6. Optionally installs Caddy with auto-SSL
+
+**Use cases:**
+* Deploy subscription pages closer to users (geo-distribution)
+* Separate subscription traffic from main panel
+* Scale subscription delivery independently
 
 ---
 
@@ -200,6 +234,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 | `subpage-token` | Configure API token | `remnawave subpage-token` |
 | `subpage-restart` | Restart subscription-page container | `remnawave subpage-restart` |
 | `install-subpage` | Install subscription-page only | `remnawave install-subpage` |
+| `install-subpage-standalone` | Install subpage on separate server | `remnawave install-subpage-standalone [--with-caddy]` |
+| `caddy-standalone` | Install Caddy for standalone subpage | `remnawave caddy-standalone` |
 
 #### Caddy Reverse Proxy Management
 | Command | Description | Usage |

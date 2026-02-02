@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.7.0
+# VERSION=5.8.0
 
-SCRIPT_VERSION="5.7.0"
+SCRIPT_VERSION="5.8.0"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -204,6 +204,16 @@ L_en_BACKUP_STATUS="Backup Status"
 L_en_INVALID_OPTION="Invalid option!"
 L_en_PRESS_ENTER="Press Enter to continue..."
 
+# Standalone Subpage
+L_en_STANDALONE_TITLE="Standalone Subscription-Page"
+L_en_STANDALONE_RUNNING="Subscription-Page: Running"
+L_en_STANDALONE_STOPPED="Subscription-Page: Stopped"
+L_en_STANDALONE_REMOTE_PANEL="Remote Panel"
+L_en_STANDALONE_CONFIG_TOKEN="Configure API Token"
+L_en_STANDALONE_EDIT_ENV="Edit .env.subscription"
+L_en_STANDALONE_UPDATE="Update Container"
+L_en_STANDALONE_UNINSTALL="Uninstall"
+
 # ===== RUSSIAN STRINGS =====
 # Main Menu
 L_ru_MENU_TITLE="Главное меню"
@@ -285,6 +295,16 @@ L_ru_RESOURCE_USAGE="Использование ресурсов"
 L_ru_BACKUP_STATUS="Статус бэкапов"
 L_ru_INVALID_OPTION="Неверная опция!"
 L_ru_PRESS_ENTER="Нажмите Enter для продолжения..."
+
+# Standalone Subpage (Russian)
+L_ru_STANDALONE_TITLE="Standalone Страница подписки"
+L_ru_STANDALONE_RUNNING="Страница подписки: Запущена"
+L_ru_STANDALONE_STOPPED="Страница подписки: Остановлена"
+L_ru_STANDALONE_REMOTE_PANEL="Удалённая панель"
+L_ru_STANDALONE_CONFIG_TOKEN="Настроить API токен"
+L_ru_STANDALONE_EDIT_ENV="Редактировать .env.subscription"
+L_ru_STANDALONE_UPDATE="Обновить контейнер"
+L_ru_STANDALONE_UNINSTALL="Удалить"
 
 # Load language on script start
 load_menu_language
@@ -9692,6 +9712,36 @@ is_remnawave_up() {
     fi
 }
 
+# Check if subpage is installed in standalone mode (without panel)
+is_subpage_standalone() {
+    # Check for standalone marker file
+    if [ -f "$APP_DIR/.standalone-subpage" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Check if only subpage is installed (standalone mode)
+is_subpage_installed() {
+    if [ -f "$APP_DIR/docker-compose.yml" ] && [ -f "$APP_DIR/.env.subscription" ]; then
+        # Check if it's standalone (no panel in compose file)
+        if ! grep -q "remnawave-db:" "$APP_DIR/docker-compose.yml" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Check if subpage container is running
+is_subpage_up() {
+    detect_compose
+    local subpage_container=$(docker ps --filter "name=${APP_NAME}-subscription-page" --format '{{.Names}}' 2>/dev/null | head -1)
+    if [ -n "$subpage_container" ]; then
+        return 0
+    fi
+    return 1
+}
+
 check_editor() {
     if [ -z "$EDITOR" ]; then
         if command -v nano >/dev/null 2>&1; then
@@ -10156,6 +10206,520 @@ EOF
     echo -e "   \033[38;5;244m4. Run: $APP_NAME subpage\033[0m"
     echo
     colorized_echo yellow "Or directly configure: $APP_NAME subpage-token"
+}
+
+# ===== STANDALONE SUBPAGE INSTALLATION =====
+# Install subscription-page on a separate server (without panel)
+
+install_subpage_standalone_command() {
+    check_running_as_root
+    
+    # Help message
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo -e "\033[1;37m📄 install-subpage-standalone\033[0m - Install subscription-page on separate server"
+        echo
+        echo -e "\033[1;37mDescription:\033[0m"
+        echo -e "  Installs subscription-page container on a standalone server"
+        echo -e "  (without Remnawave panel). Connects to remote panel via API."
+        echo
+        echo -e "\033[1;37mUsage:\033[0m"
+        echo -e "  \033[38;5;15m$APP_NAME\033[0m \033[38;5;250minstall-subpage-standalone\033[0m [\033[38;5;244m--with-caddy\033[0m]"
+        echo
+        echo -e "\033[1;37mOptions:\033[0m"
+        echo -e "  \033[38;5;244m--with-caddy\033[0m    Also install Caddy reverse proxy"
+        echo
+        echo -e "\033[1;37mRequirements:\033[0m"
+        echo -e "  • Remote Remnawave panel URL (https://panel.domain.com)"
+        echo -e "  • API token from panel (Settings → API Tokens)"
+        echo -e "  • Domain for subscription page"
+        echo
+        exit 0
+    fi
+    
+    local with_caddy=false
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            --with-caddy) with_caddy=true ;;
+            *) ;;
+        esac
+        shift
+    done
+    
+    # Check if already installed
+    if is_subpage_standalone; then
+        colorized_echo yellow "⚠️  Standalone subscription-page is already installed at $APP_DIR"
+        read -r -p "Do you want to reinstall? (y/n) "
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            colorized_echo red "Aborted installation"
+            exit 1
+        fi
+        # Stop existing container
+        detect_compose
+        cd "$APP_DIR" 2>/dev/null || true
+        $COMPOSE down 2>/dev/null || true
+    fi
+    
+    # Check if full panel is installed
+    if is_remnawave_installed && ! is_subpage_standalone; then
+        colorized_echo red "⚠️  Full Remnawave panel is already installed on this server!"
+        colorized_echo yellow "Standalone subpage mode is for separate servers only."
+        colorized_echo yellow "Use '$APP_NAME install-subpage' to add subpage to existing panel."
+        exit 1
+    fi
+    
+    detect_os
+    if ! command -v curl >/dev/null 2>&1; then
+        install_package curl
+    fi
+    
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "📄 Standalone Subscription-Page Installation"
+    colorized_echo cyan "==================================================="
+    echo
+    colorized_echo white "This will install ONLY the subscription-page container"
+    colorized_echo white "on this server, connecting to a remote Remnawave panel."
+    echo
+    
+    # Get remote panel URL
+    echo -e "\033[1;37m📡 Remote Panel Configuration:\033[0m"
+    echo
+    read -p "Enter Remnawave panel URL (e.g., https://panel.domain.com): " -r panel_url
+    
+    # Validate URL format
+    if [[ ! "$panel_url" =~ ^https?:// ]]; then
+        colorized_echo yellow "Adding https:// prefix..."
+        panel_url="https://$panel_url"
+    fi
+    # Remove trailing slash
+    panel_url="${panel_url%/}"
+    
+    echo
+    colorized_echo blue "Testing connection to panel..."
+    
+    # Test connection to panel
+    local test_status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 "$panel_url" 2>/dev/null || echo "000")
+    if [ "$test_status" = "000" ]; then
+        colorized_echo yellow "⚠️  Cannot connect to $panel_url"
+        colorized_echo yellow "Make sure the panel URL is correct and accessible."
+        read -p "Continue anyway? (y/n): " -r continue_anyway
+        if [[ ! $continue_anyway =~ ^[Yy]$ ]]; then
+            colorized_echo red "Aborted installation"
+            exit 1
+        fi
+    else
+        colorized_echo green "✅ Panel is reachable (HTTP $test_status)"
+    fi
+    
+    echo
+    echo -e "\033[1;37m🔑 API Token:\033[0m"
+    echo -e "\033[38;5;244mGet token from panel: Settings → API Tokens → Create new token\033[0m"
+    echo
+    read -p "Enter API token (or leave empty to configure later): " -r api_token
+    
+    echo
+    echo -e "\033[1;37m🌐 Subscription Page Domain:\033[0m"
+    read -p "Enter domain for subscription page (e.g., sub.domain.com): " -r sub_domain
+    
+    if [ -z "$sub_domain" ]; then
+        colorized_echo red "Domain is required!"
+        exit 1
+    fi
+    
+    # Subscription prefix
+    read -p "Enter subscription path prefix (default: sub): " -r sub_prefix
+    sub_prefix="${sub_prefix:-sub}"
+    
+    # Port for subscription page
+    local sub_port="${SUB_PAGE_PORT:-3010}"
+    
+    echo
+    colorized_echo blue "📁 Creating directory $APP_DIR..."
+    mkdir -p "$APP_DIR"
+    mkdir -p "$APP_DIR/logs"
+    
+    # Create standalone marker
+    echo "standalone" > "$APP_DIR/.standalone-subpage"
+    echo "Installed: $(date)" >> "$APP_DIR/.standalone-subpage"
+    echo "Panel URL: $panel_url" >> "$APP_DIR/.standalone-subpage"
+    
+    # Create .env.subscription
+    colorized_echo blue "📝 Creating .env.subscription..."
+    cat > "$SUB_ENV_FILE" << EOF
+### Standalone Subscription Page Configuration
+### Created by install-subpage-standalone command
+### $(date)
+
+# Remote Remnawave Panel URL
+REMNAWAVE_PANEL_URL=$panel_url
+
+# Subscription page port inside container
+APP_PORT=$sub_port
+
+# Custom subscription prefix path (without leading/trailing slashes)
+CUSTOM_SUB_PREFIX=$sub_prefix
+
+# API Token from Remnawave Panel (Settings → API Tokens)
+REMNAWAVE_API_TOKEN=$api_token
+
+# Support Marzban links (optional)
+#MARZBAN_LEGACY_LINK_ENABLED=false
+#MARZBAN_LEGACY_SECRET_KEY=
+EOF
+    colorized_echo green "✅ Created $SUB_ENV_FILE"
+    
+    # Generate standalone docker-compose.yml
+    colorized_echo blue "📝 Creating docker-compose.yml..."
+    generate_standalone_subpage_compose "$sub_port"
+    colorized_echo green "✅ Created $COMPOSE_FILE"
+    
+    # Install Docker if needed
+    if ! command -v docker >/dev/null 2>&1; then
+        colorized_echo blue "🐳 Installing Docker..."
+        curl -fsSL https://get.docker.com | sh
+        systemctl start docker
+        systemctl enable docker
+    fi
+    
+    detect_compose
+    
+    # Pull and start container
+    colorized_echo blue "📥 Pulling subscription-page image..."
+    cd "$APP_DIR"
+    $COMPOSE pull
+    
+    colorized_echo blue "🚀 Starting subscription-page container..."
+    $COMPOSE up -d
+    
+    # Wait for container to start
+    sleep 3
+    
+    # Check if running
+    if is_subpage_up; then
+        colorized_echo green "✅ Subscription-page container is running"
+    else
+        colorized_echo red "❌ Container failed to start"
+        colorized_echo yellow "Check logs: docker logs ${APP_NAME}-subscription-page"
+    fi
+    
+    # Install Caddy if requested
+    if [ "$with_caddy" = true ]; then
+        echo
+        install_caddy_for_standalone_subpage "$sub_domain" "$sub_port" "$sub_prefix"
+    else
+        echo
+        colorized_echo yellow "💡 Tip: Install Caddy for HTTPS:"
+        echo -e "   \033[38;5;15m$APP_NAME caddy-standalone\033[0m"
+    fi
+    
+    echo
+    colorized_echo green "==================================================="
+    colorized_echo green "🎉 Standalone Subscription-Page Installed!"
+    colorized_echo green "==================================================="
+    echo
+    colorized_echo white "📋 Configuration:"
+    echo "   Panel URL:     $panel_url"
+    echo "   Subpage Port:  $sub_port (localhost only)"
+    echo "   Domain:        $sub_domain"
+    echo "   Config dir:    $APP_DIR"
+    echo
+    
+    if [ -z "$api_token" ]; then
+        colorized_echo yellow "⚠️  IMPORTANT: Configure API token!"
+        echo -e "   \033[38;5;244m1. Login to Remnawave Panel\033[0m"
+        echo -e "   \033[38;5;244m2. Go to Settings → API Tokens\033[0m"
+        echo -e "   \033[38;5;244m3. Create token named 'subscription-page'\033[0m"
+        echo -e "   \033[38;5;244m4. Run: $APP_NAME subpage-token\033[0m"
+    fi
+    
+    echo
+    colorized_echo white "📝 Useful commands:"
+    echo "   Status:   $APP_NAME status"
+    echo "   Logs:     $APP_NAME logs"
+    echo "   Restart:  $APP_NAME restart"
+    echo "   Menu:     $APP_NAME"
+    echo
+}
+
+# Generate standalone docker-compose.yml for subscription-page only
+generate_standalone_subpage_compose() {
+    local sub_port="${1:-3010}"
+    
+    cat > "$COMPOSE_FILE" << EOL
+# Standalone Subscription-Page for Remnawave
+# Generated by remnawave.sh - GIG.OVH Project
+# This configuration is for running subscription-page on a SEPARATE server
+# without the main Remnawave panel.
+
+services:
+    ${APP_NAME}-subscription-page:
+        image: remnawave/subscription-page:latest
+        container_name: ${APP_NAME}-subscription-page
+        hostname: ${APP_NAME}-subscription-page
+        restart: always
+        env_file:
+            - .env.subscription
+        ports:
+            - '127.0.0.1:${sub_port}:\${APP_PORT:-3010}'
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        healthcheck:
+            test: ['CMD-SHELL', 'wget -q --spider http://localhost:\${APP_PORT:-3010}/health || exit 1']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+
+networks:
+    default:
+        name: ${APP_NAME}-standalone-network
+        driver: bridge
+EOL
+}
+
+# Install Caddy for standalone subscription-page
+install_caddy_for_standalone_subpage() {
+    local sub_domain="$1"
+    local sub_port="${2:-3010}"
+    local sub_prefix="${3:-sub}"
+    
+    colorized_echo cyan "==================================================="
+    colorized_echo cyan "🌐 Installing Caddy for Standalone Subpage"
+    colorized_echo cyan "==================================================="
+    echo
+    
+    # Check for existing web servers
+    local existing_webserver=$(check_existing_webserver)
+    
+    if [ -n "$existing_webserver" ] && [ "$existing_webserver" != "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Existing web server detected: $existing_webserver"
+        echo
+        colorized_echo yellow "Caddy needs ports 80 and 443 to work properly."
+        colorized_echo yellow "You need to stop or remove the existing web server first."
+        echo
+        read -p "Do you want to continue anyway? (y/n): " -r continue_install
+        if [[ ! $continue_install =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+    elif [ "$existing_webserver" = "port_in_use" ]; then
+        colorized_echo yellow "⚠️  Ports 80 or 443 are already in use"
+        echo
+        colorized_echo yellow "Caddy needs these ports to work properly."
+        echo
+        read -p "Do you want to continue anyway? (y/n): " -r continue_install
+        if [[ ! $continue_install =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+    fi
+    
+    # Check firewall
+    check_firewall_ports
+    
+    # DNS validation
+    colorized_echo white "🔍 Verifying DNS configuration for $sub_domain..."
+    echo
+    if ! validate_domain_dns "$sub_domain"; then
+        echo
+        colorized_echo yellow "⚠️  DNS check did not pass."
+        colorized_echo yellow "    Caddy may fail to obtain SSL certificates if domain"
+        colorized_echo yellow "    is not properly pointing to this server."
+        echo
+        read -p "Continue with Caddy installation anyway? (y/n): " -r continue_anyway
+        if [[ ! $continue_anyway =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            colorized_echo yellow "Fix DNS configuration and run: remnawave caddy-standalone"
+            return 1
+        fi
+    else
+        colorized_echo green "✅ DNS check passed for $sub_domain"
+        echo
+    fi
+    
+    # Check if Caddy is already installed
+    if is_caddy_installed; then
+        colorized_echo yellow "⚠️  Caddy is already installed at $CADDY_DIR"
+        read -p "Do you want to reinstall? (y/n): " -r reinstall
+        if [[ ! $reinstall =~ ^[Yy]$ ]]; then
+            colorized_echo gray "Caddy installation cancelled."
+            return 1
+        fi
+        cd "$CADDY_DIR"
+        docker compose down 2>/dev/null || true
+    fi
+    
+    # Create directory
+    mkdir -p "$CADDY_DIR"
+    mkdir -p "$CADDY_DIR/logs"
+    
+    colorized_echo blue "📁 Creating configuration in $CADDY_DIR"
+    echo
+    
+    # Create .env file
+    cat > "$CADDY_DIR/.env" << EOF
+# Caddy Reverse Proxy for Standalone Subscription-Page
+# Generated on $(date)
+# Server IP: ${NODE_IP:-127.0.0.1}
+
+SUB_DOMAIN=$sub_domain
+SUB_PORT=$sub_port
+SUB_PREFIX=$sub_prefix
+EOF
+    colorized_echo green "✅ .env file created"
+    
+    # Create docker-compose.yml for Caddy
+    cat > "$CADDY_DIR/docker-compose.yml" << EOF
+services:
+  caddy:
+    image: caddy:${CADDY_VERSION}
+    container_name: caddy-remnawave
+    hostname: caddy
+    restart: always
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./logs:/var/log/caddy
+      - caddy-ssl-data:/data
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-ssl-data:
+    driver: local
+    external: false
+    name: caddy-standalone-ssl-data
+EOF
+    colorized_echo green "✅ docker-compose.yml created"
+    
+    # Create Caddyfile for standalone subpage
+    cat > "$CADDY_DIR/Caddyfile" << EOF
+# Caddy Reverse Proxy for Standalone Subscription-Page
+# Generated by remnawave.sh - GIG.OVH Project
+
+{
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+https://{\$SUB_DOMAIN} {
+    encode zstd gzip
+    
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+    
+    # Health check endpoint
+    handle /health {
+        reverse_proxy host.docker.internal:{\$SUB_PORT}
+    }
+    
+    # All requests go to subscription-page
+    handle /* {
+        reverse_proxy host.docker.internal:{\$SUB_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Host {host}
+        }
+    }
+}
+
+# HTTP to HTTPS redirect
+http://{\$SUB_DOMAIN} {
+    redir https://{\$SUB_DOMAIN}{uri} permanent
+}
+EOF
+    colorized_echo green "✅ Caddyfile created"
+    
+    # Start Caddy
+    colorized_echo blue "🚀 Starting Caddy..."
+    cd "$CADDY_DIR"
+    
+    if docker compose up -d 2>&1; then
+        colorized_echo green "✅ Caddy started successfully!"
+    else
+        colorized_echo red "❌ Failed to start Caddy"
+        return 1
+    fi
+    
+    # Wait for Caddy to start
+    sleep 3
+    
+    # Check if running
+    if docker ps --format '{{.Names}}' | grep -q "caddy-remnawave"; then
+        colorized_echo green "✅ Caddy is running"
+    else
+        colorized_echo red "❌ Caddy container is not running"
+        colorized_echo yellow "Check logs with: docker logs caddy-remnawave"
+        return 1
+    fi
+    
+    echo
+    colorized_echo green "==================================================="
+    colorized_echo green "🎉 Caddy Reverse Proxy installed!"
+    colorized_echo green "==================================================="
+    echo
+    colorized_echo white "📋 Configuration:"
+    echo "   Subscription URL: https://$sub_domain"
+    echo "   Config directory: $CADDY_DIR"
+    echo
+    colorized_echo yellow "💡 SSL certificates will be automatically issued by Let's Encrypt"
+    echo
+    
+    return 0
+}
+
+# Caddy command for standalone mode
+caddy_standalone_command() {
+    check_running_as_root
+    
+    if ! is_subpage_standalone; then
+        colorized_echo red "This command is for standalone subpage mode only."
+        colorized_echo yellow "Use '$APP_NAME caddy' for full panel installation."
+        exit 1
+    fi
+    
+    # Get subpage domain from .env.subscription or ask
+    local sub_domain=""
+    local sub_port="${SUB_PAGE_PORT:-3010}"
+    local sub_prefix="sub"
+    
+    if [ -f "$APP_DIR/.standalone-subpage" ]; then
+        # Try to get existing domain from Caddy config
+        if [ -f "$CADDY_DIR/.env" ]; then
+            sub_domain=$(grep "^SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+            sub_port=$(grep "^SUB_PORT=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+            sub_prefix=$(grep "^SUB_PREFIX=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+        fi
+    fi
+    
+    if [ -z "$sub_domain" ]; then
+        read -p "Enter domain for subscription page: " -r sub_domain
+    fi
+    
+    if [ -z "$sub_domain" ]; then
+        colorized_echo red "Domain is required!"
+        exit 1
+    fi
+    
+    install_caddy_for_standalone_subpage "$sub_domain" "$sub_port" "$sub_prefix"
 }
 
 up_command() {
@@ -11243,6 +11807,298 @@ pm2_monitor() {
     docker exec -it $APP_NAME pm2 monit
 }
 
+# ===== STANDALONE SUBPAGE MENU =====
+# Limited menu for standalone subscription-page mode
+
+standalone_subpage_menu() {
+    while true; do
+        clear
+        local lang_indicator="🇬🇧"
+        [ "$MENU_LANG" = "ru" ] && lang_indicator="🇷🇺"
+        
+        echo -e "\033[1;37m📄 Standalone Subscription-Page\033[0m \033[38;5;244mv$SCRIPT_VERSION\033[0m  $lang_indicator"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        echo
+        
+        # Get panel URL from marker file
+        local panel_url=""
+        if [ -f "$APP_DIR/.standalone-subpage" ]; then
+            panel_url=$(grep "^Panel URL:" "$APP_DIR/.standalone-subpage" 2>/dev/null | cut -d' ' -f3-)
+        fi
+        
+        # Status display
+        if is_subpage_up; then
+            echo -e "\033[1;32m✅ Subscription-Page: Running\033[0m"
+        else
+            echo -e "\033[1;31m❌ Subscription-Page: Stopped\033[0m"
+        fi
+        
+        # Show Caddy status
+        if is_caddy_installed; then
+            if is_caddy_up; then
+                echo -e "\033[1;32m✅ Caddy: Running\033[0m"
+            else
+                echo -e "\033[1;31m❌ Caddy: Stopped\033[0m"
+            fi
+        fi
+        
+        if [ -n "$panel_url" ]; then
+            echo
+            echo -e "\033[38;5;244m📡 Remote Panel: $panel_url\033[0m"
+        fi
+        
+        # Get subpage domain from Caddy config
+        if [ -f "$CADDY_DIR/.env" ]; then
+            local sub_domain=$(grep "^SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2)
+            if [ -n "$sub_domain" ]; then
+                echo -e "\033[38;5;117m🌐 URL: https://$sub_domain\033[0m"
+            fi
+        fi
+        
+        echo
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        echo
+        
+        echo -e "\033[1;37m📊 Status & Monitoring:\033[0m"
+        echo -e "   \033[38;5;15m1)\033[0m 📊 Status"
+        echo -e "   \033[38;5;15m2)\033[0m 📋 View Logs"
+        echo
+        
+        echo -e "\033[1;37m⚙️  Services Control:\033[0m"
+        echo -e "   \033[38;5;15m3)\033[0m ▶️  Start"
+        echo -e "   \033[38;5;15m4)\033[0m ⏹️  Stop"
+        echo -e "   \033[38;5;15m5)\033[0m 🔄 Restart"
+        echo
+        
+        echo -e "\033[1;37m🌐 Caddy Reverse Proxy:\033[0m"
+        if is_caddy_installed; then
+            echo -e "   \033[38;5;15m6)\033[0m 🌐 Caddy Management →"
+        else
+            echo -e "   \033[38;5;15m6)\033[0m 🌐 Install Caddy"
+        fi
+        echo
+        
+        echo -e "\033[1;37m🔧 Configuration:\033[0m"
+        echo -e "   \033[38;5;15m7)\033[0m 🔑 Configure API Token"
+        echo -e "   \033[38;5;15m8)\033[0m 📝 Edit .env.subscription"
+        echo -e "   \033[38;5;15m9)\033[0m ⬆️  Update Container"
+        echo
+        
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        echo -e "   \033[38;5;15mL)\033[0m 🌐 Language / Язык"
+        echo -e "   \033[38;5;244mU)\033[0m 🗑️  Uninstall"
+        echo -e "   \033[38;5;15m0)\033[0m 🚪 Exit"
+        echo
+        echo -e "\033[38;5;8mStandalone Subpage CLI v$SCRIPT_VERSION by DigneZzZ • gig.ovh\033[0m"
+        echo
+        read -p "$(echo -e "\033[1;37mSelect [0-9, L, U]:\033[0m ")" choice
+        
+        case "$choice" in
+            1) standalone_status_command; read -p "Press Enter to continue..." ;;
+            2) standalone_logs_command ;;
+            3) standalone_up_command; read -p "Press Enter to continue..." ;;
+            4) standalone_down_command; read -p "Press Enter to continue..." ;;
+            5) standalone_restart_command; read -p "Press Enter to continue..." ;;
+            6) 
+                if is_caddy_installed; then
+                    caddy_menu
+                else
+                    caddy_standalone_command
+                    read -p "Press Enter to continue..."
+                fi
+                ;;
+            7) subpage_configure_token; read -p "Press Enter to continue..." ;;
+            8) standalone_edit_env ;;
+            9) standalone_update_command; read -p "Press Enter to continue..." ;;
+            [Ll]) 
+                if [ "$MENU_LANG" = "en" ]; then
+                    save_menu_language "ru"
+                else
+                    save_menu_language "en"
+                fi
+                ;;
+            [Uu]) standalone_uninstall_command; read -p "Press Enter to continue..." ;;
+            0) clear; exit 0 ;;
+            *) 
+                echo -e "\033[1;31mInvalid option!\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Standalone subpage commands
+standalone_status_command() {
+    clear
+    echo -e "\033[1;37m📊 Standalone Subpage Status\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    echo
+    
+    detect_compose
+    
+    echo -e "\033[1;37mContainer Status:\033[0m"
+    docker ps --filter "name=${APP_NAME}-subscription-page" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "No containers found"
+    echo
+    
+    if is_caddy_installed; then
+        echo -e "\033[1;37mCaddy Status:\033[0m"
+        docker ps --filter "name=caddy-remnawave" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "Not running"
+        echo
+    fi
+    
+    echo -e "\033[1;37mConfiguration:\033[0m"
+    if [ -f "$APP_DIR/.standalone-subpage" ]; then
+        cat "$APP_DIR/.standalone-subpage"
+    fi
+    echo
+    
+    # Check API token
+    if [ -f "$SUB_ENV_FILE" ]; then
+        local api_token=$(grep "^REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null | cut -d'=' -f2)
+        if [ -z "$api_token" ]; then
+            echo -e "\033[1;33m⚠️  API Token: Not configured\033[0m"
+        else
+            echo -e "\033[1;32m✅ API Token: Configured\033[0m"
+        fi
+    fi
+}
+
+standalone_logs_command() {
+    detect_compose
+    cd "$APP_DIR"
+    $COMPOSE logs -f --tail=100
+}
+
+standalone_up_command() {
+    detect_compose
+    cd "$APP_DIR"
+    colorized_echo blue "Starting subscription-page..."
+    $COMPOSE up -d
+    
+    if is_subpage_up; then
+        colorized_echo green "✅ Subscription-page started!"
+    else
+        colorized_echo red "❌ Failed to start"
+    fi
+    
+    # Also start Caddy if installed
+    if is_caddy_installed; then
+        colorized_echo blue "Starting Caddy..."
+        cd "$CADDY_DIR"
+        docker compose up -d
+        if is_caddy_up; then
+            colorized_echo green "✅ Caddy started!"
+        fi
+    fi
+}
+
+standalone_down_command() {
+    detect_compose
+    cd "$APP_DIR"
+    colorized_echo blue "Stopping subscription-page..."
+    $COMPOSE down
+    colorized_echo green "✅ Subscription-page stopped"
+    
+    # Also stop Caddy if installed
+    if is_caddy_installed; then
+        colorized_echo blue "Stopping Caddy..."
+        cd "$CADDY_DIR"
+        docker compose down
+        colorized_echo green "✅ Caddy stopped"
+    fi
+}
+
+standalone_restart_command() {
+    detect_compose
+    cd "$APP_DIR"
+    colorized_echo blue "Restarting subscription-page..."
+    $COMPOSE restart
+    
+    if is_subpage_up; then
+        colorized_echo green "✅ Subscription-page restarted!"
+    else
+        colorized_echo red "❌ Container not running"
+    fi
+    
+    # Also restart Caddy if installed
+    if is_caddy_installed && is_caddy_up; then
+        colorized_echo blue "Restarting Caddy..."
+        cd "$CADDY_DIR"
+        docker compose restart
+        colorized_echo green "✅ Caddy restarted!"
+    fi
+}
+
+standalone_update_command() {
+    detect_compose
+    cd "$APP_DIR"
+    
+    colorized_echo blue "Pulling latest subscription-page image..."
+    $COMPOSE pull
+    
+    colorized_echo blue "Recreating container with new image..."
+    $COMPOSE up -d --force-recreate
+    
+    if is_subpage_up; then
+        colorized_echo green "✅ Subscription-page updated!"
+    else
+        colorized_echo red "❌ Update failed"
+    fi
+}
+
+standalone_edit_env() {
+    check_editor
+    
+    if [ ! -f "$SUB_ENV_FILE" ]; then
+        colorized_echo red ".env.subscription file not found!"
+        return 1
+    fi
+    
+    $EDITOR "$SUB_ENV_FILE"
+    
+    echo
+    colorized_echo yellow "⚠️  Restart required for changes to take effect"
+    read -p "Restart now? (y/n): " -r restart_now
+    if [[ $restart_now =~ ^[Yy]$ ]]; then
+        standalone_restart_command
+    fi
+}
+
+standalone_uninstall_command() {
+    colorized_echo yellow "⚠️  This will remove the standalone subscription-page installation"
+    echo
+    read -p "Are you sure? (y/n): " -r confirm
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        colorized_echo gray "Cancelled"
+        return 0
+    fi
+    
+    detect_compose
+    
+    # Stop and remove containers
+    colorized_echo blue "Stopping containers..."
+    cd "$APP_DIR" 2>/dev/null && $COMPOSE down 2>/dev/null || true
+    
+    if is_caddy_installed; then
+        colorized_echo blue "Stopping Caddy..."
+        cd "$CADDY_DIR" && docker compose down 2>/dev/null || true
+        
+        read -p "Remove Caddy configuration? (y/n): " -r remove_caddy
+        if [[ $remove_caddy =~ ^[Yy]$ ]]; then
+            rm -rf "$CADDY_DIR"
+            colorized_echo green "✅ Caddy removed"
+        fi
+    fi
+    
+    read -p "Remove all configuration files? (y/n): " -r remove_config
+    if [[ $remove_config =~ ^[Yy]$ ]]; then
+        rm -rf "$APP_DIR"
+        colorized_echo green "✅ Configuration removed"
+    fi
+    
+    colorized_echo green "✅ Standalone subscription-page uninstalled"
+}
+
 main_menu() {
     # Check for script updates on first menu display
     local remote_script_version=$(curl -s --connect-timeout 3 "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | head -1 | cut -d'"' -f2)
@@ -11551,7 +12407,12 @@ usage() {
     printf "   \033[38;5;117m%-18s\033[0m %s\n" "pm2-monitor" "📊 PM2 process monitor"
     echo
 
-    echo -e "\033[1;37m📊 Script Management:\033[0m"
+    echo -e "\033[1;37m� Standalone Subscription-Page:\033[0m"
+    printf "   \033[38;5;214m%-24s\033[0m %s\n" "install-subpage-standalone" "🌐 Install subpage on separate server"
+    printf "   \033[38;5;214m%-24s\033[0m %s\n" "caddy-standalone" "🔒 Install Caddy for standalone subpage"
+    echo
+
+    echo -e "\033[1;37m�📊 Script Management:\033[0m"
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "install-script" "📥 Install this script globally"
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "uninstall-script" "📤 Remove script from system"
     echo
@@ -11852,13 +12713,56 @@ smart_usage() {
 case "$COMMAND" in
     install) install_command ;;
     install-subpage) install_subpage_command "$@" ;;
-    update) update_command ;;
-    uninstall) uninstall_command ;;
-    up) up_command ;;
-    down) down_command ;;
-    restart) restart_command ;;
-    status) status_command ;;
-    logs) logs_command ;;
+    install-subpage-standalone) install_subpage_standalone_command "$@" ;;
+    update) 
+        if is_subpage_standalone; then
+            standalone_update_command
+        else
+            update_command
+        fi
+        ;;
+    uninstall) 
+        if is_subpage_standalone; then
+            standalone_uninstall_command
+        else
+            uninstall_command
+        fi
+        ;;
+    up) 
+        if is_subpage_standalone; then
+            standalone_up_command
+        else
+            up_command
+        fi
+        ;;
+    down) 
+        if is_subpage_standalone; then
+            standalone_down_command
+        else
+            down_command
+        fi
+        ;;
+    restart) 
+        if is_subpage_standalone; then
+            standalone_restart_command
+        else
+            restart_command
+        fi
+        ;;
+    status) 
+        if is_subpage_standalone; then
+            standalone_status_command
+        else
+            status_command
+        fi
+        ;;
+    logs) 
+        if is_subpage_standalone; then
+            standalone_logs_command
+        else
+            logs_command
+        fi
+        ;;
     monitor) monitor_command ;;
     health) health_check_command ;;
     schedule) schedule_command "$@" ;;
@@ -11867,7 +12771,13 @@ case "$COMMAND" in
     update-script) update_remnawave_script ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
-    edit-env-sub) edit_env_sub_command ;;
+    edit-env-sub) 
+        if is_subpage_standalone; then
+            standalone_edit_env
+        else
+            edit_env_sub_command
+        fi
+        ;;
     console) console_command ;;
     pm2-monitor) pm2_monitor ;;
     backup) backup_command "$@" ;;
@@ -11875,11 +12785,30 @@ case "$COMMAND" in
     subpage) subpage_command ;;
     subpage-restart) subpage_restart_command ;;
     subpage-token) subpage_configure_token ;;
-    caddy) caddy_command "$1" ;;
-    menu) main_menu ;;  
+    caddy) 
+        if is_subpage_standalone; then
+            caddy_standalone_command
+        else
+            caddy_command "$1"
+        fi
+        ;;
+    caddy-standalone) caddy_standalone_command ;;
+    menu) 
+        if is_subpage_standalone; then
+            standalone_subpage_menu
+        else
+            main_menu
+        fi
+        ;;  
     help) smart_usage "help" "$1" ;;
     --version|-v) show_version ;;
     --help|-h) smart_usage ;;
-    "") main_menu ;;    
+    "") 
+        if is_subpage_standalone; then
+            standalone_subpage_menu
+        else
+            main_menu
+        fi
+        ;;    
     *) smart_usage ;;
 esac

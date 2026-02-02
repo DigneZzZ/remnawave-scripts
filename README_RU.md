@@ -2,7 +2,7 @@
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![Версия](https://img.shields.io/badge/версия-5.4.5-blue.svg)](#)
+[![Версия](https://img.shields.io/badge/версия-5.8.0-blue.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐_Языки-EN_|_RU-green.svg)](#)
 [![Remnawave Panel](https://img.shields.io/badge/Инсталлятор-Remnawave-brightgreen)](#-установщик-remnawave-panel)
 [![RemnaNode](https://img.shields.io/badge/Инсталлятор-RemnaNode-lightgrey)](#-установщик-remnanode)
@@ -132,6 +132,14 @@
 * Новые команды: `subpage`, `subpage-token`, `install-subpage`
 * Интерактивное меню управления страницей подписки
 
+**🌍 Standalone Subscription-Page (v5.8.0+)**
+* Установка subscription-page на **отдельном сервере** от основной панели
+* Подключение к удалённой панели через `REMNAWAVE_PANEL_URL`
+* Опциональная установка **Caddy с автоматическим SSL**
+* Облегчённый docker-compose без БД/Redis зависимостей
+* Отдельное меню с ограниченным набором функций
+* Автоопределение режима standalone vs полной установки
+
 ---
 
 ### 📦 Быстрый старт
@@ -143,6 +151,30 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 # Установка только скрипта управления
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-script --name remnawave
 ```
+
+---
+
+### 🌐 Standalone Subscription-Page
+
+Установка subscription-page на **отдельном сервере** от основной панели Remnawave:
+
+```bash
+# Базовая установка (ручная настройка reverse proxy)
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone
+
+# Установка с Caddy reverse proxy (авто-SSL)
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone --with-caddy
+```
+
+Скрипт запросит:
+- `REMNAWAVE_PANEL_URL` — URL основной панели (например, `https://panel.example.com`)
+- `REMNAWAVE_API_TOKEN` — API токен из панели
+- Домен для страницы подписки (если с Caddy)
+
+**Когда использовать:**
+- Изоляция нагрузки страницы подписки
+- Географическое распределение
+- Дополнительный уровень безопасности
 
 ---
 
@@ -201,6 +233,8 @@ sudo remnawave.sh install --name panel-prod --path /home/user
 | `subpage-token` | Настроить API токен | `remnawave subpage-token` |
 | `subpage-restart` | Перезапустить контейнер subscription-page | `remnawave subpage-restart` |
 | `install-subpage` | Установить только subscription-page | `remnawave install-subpage` |
+| `install-subpage-standalone` | Установить subpage на отдельном сервере | `remnawave install-subpage-standalone [--with-caddy]` |
+| `caddy-standalone` | Управление Caddy для standalone subpage | `remnawave caddy-standalone` |
 
 #### Управление Caddy Reverse Proxy
 | Команда | Описание | Использование |
