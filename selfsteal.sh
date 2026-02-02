@@ -2141,11 +2141,12 @@ EOF
     cat > "$APP_DIR/nginx.conf" << 'EOF'
 user nginx;
 worker_processes auto;
+worker_rlimit_nofile 65535;
 error_log /var/log/nginx/error.log warn;
 pid /var/run/nginx.pid;
 
 events {
-    worker_connections 1024;
+    worker_connections 4096;
     use epoll;
     multi_accept on;
 }
@@ -2164,20 +2165,38 @@ http {
 
     access_log /var/log/nginx/access.log main;
 
+    # Performance optimizations
     sendfile on;
     tcp_nopush on;
     tcp_nodelay on;
     keepalive_timeout 65;
+    keepalive_requests 1000;
     types_hash_max_size 2048;
     server_tokens off;
 
-    # Gzip compression
+    # Buffer optimizations
+    client_body_buffer_size 16k;
+    client_header_buffer_size 1k;
+    client_max_body_size 8m;
+    large_client_header_buffers 4 8k;
+
+    # Open file cache for static files
+    open_file_cache max=10000 inactive=30s;
+    open_file_cache_valid 60s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
+
+    # Gzip compression (aggressive)
     gzip on;
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml application/json application/javascript 
-               application/rss+xml application/atom+xml image/svg+xml;
+    gzip_min_length 256;
+    gzip_buffers 16 8k;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript 
+               application/xml application/rss+xml application/atom+xml image/svg+xml
+               application/x-javascript application/xhtml+xml application/x-font-ttf
+               font/opentype image/x-icon;
 
     include /etc/nginx/conf.d/*.conf;
 }
@@ -2210,7 +2229,7 @@ server {
 # HTTPS server via Unix socket with proxy_protocol (for Xray Reality)
 # Xray forwards traffic to $SOCKET_PATH with xver: 1 (proxy_protocol v1)
 server {
-    listen unix:$SOCKET_PATH ssl proxy_protocol;
+    listen unix:$SOCKET_PATH ssl proxy_protocol http2;
     server_name $domain;
 
     # SSL Configuration with ACME certificates
@@ -2221,6 +2240,13 @@ server {
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # OCSP Stapling (faster TLS handshake)
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 1.1.1.1 8.8.8.8 valid=300s;
+    resolver_timeout 5s;
 
     # Logging (proxy_protocol format includes real client IP)
     access_log /var/log/nginx/access.log proxy_protocol;
@@ -2280,7 +2306,7 @@ server {
 # HTTPS server with proxy_protocol support (for Reality)
 # Port 443 is reserved for Xray - all HTTPS traffic comes via proxy_protocol
 server {
-    listen 127.0.0.1:$port ssl proxy_protocol;
+    listen 127.0.0.1:$port ssl proxy_protocol http2;
     server_name $domain;
 
     # SSL Configuration with ACME certificates
@@ -2291,6 +2317,13 @@ server {
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # OCSP Stapling (faster TLS handshake)
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 1.1.1.1 8.8.8.8 valid=300s;
+    resolver_timeout 5s;
 
     # Logging (proxy_protocol format includes real client IP)
     access_log /var/log/nginx/access.log proxy_protocol;
