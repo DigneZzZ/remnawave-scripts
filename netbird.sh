@@ -31,10 +31,10 @@ disable_colors() {
 print_banner() {
     [[ "$QUIET_MODE" == "true" ]] && return
     echo -e "${CYAN}"
-    echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║                   NetBird Installer                       ║"
-    echo "║                     Version ${SCRIPT_VERSION}                          ║"
-    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo "╔═══════════════════════════════════════════════════════════"
+    echo "║                   NetBird Installer                       "
+    echo "║                     Version ${SCRIPT_VERSION}                         "
+    echo "╚═══════════════════════════════════════════════════════════"
     echo -e "${NC}"
 }
 
