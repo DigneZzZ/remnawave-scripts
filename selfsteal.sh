@@ -1758,6 +1758,7 @@ EOF
 	https_port {$SELF_STEAL_PORT}
 	default_bind 127.0.0.1
 	servers {
+		protocols h1 h2 h3
 		listener_wrappers {
 			proxy_protocol {
 				allow 127.0.0.1/32
@@ -1790,6 +1791,8 @@ http://{$SELF_STEAL_DOMAIN} {
 }
 
 https://{$SELF_STEAL_DOMAIN} {
+	# Enable compression (zstd preferred, gzip fallback)
+	encode zstd gzip
 	tls /etc/caddy/ssl/fullchain.crt /etc/caddy/ssl/private.key
 	root * /var/www/html
 	try_files {path} /index.html
@@ -1824,6 +1827,7 @@ EOF
 	https_port {$SELF_STEAL_PORT}
 	default_bind 127.0.0.1
 	servers {
+		protocols h1 h2 h3
 		listener_wrappers {
 			proxy_protocol {
 				allow 127.0.0.1/32
@@ -1856,6 +1860,8 @@ http://{$SELF_STEAL_DOMAIN} {
 }
 
 https://{$SELF_STEAL_DOMAIN} {
+	# Enable compression (zstd preferred, gzip fallback)
+	encode zstd gzip
 	root * /var/www/html
 	try_files {path} /index.html
 	file_server
