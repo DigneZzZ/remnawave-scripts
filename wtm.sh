@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # WARP & Tor Network Setup Script
 # This script installs and manages Cloudflare WARP and Tor connections
-# VERSION=1.2.2
+# VERSION=1.3.0
 
-set -e
-SCRIPT_VERSION="1.2.2"
+set -eE
+SCRIPT_VERSION="1.3.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Error handler for debugging
+trap 'error_handler $? $LINENO "$BASH_COMMAND"' ERR
+
+error_handler() {
+    local exit_code=$1 line=$2 command=$3
+    # Skip if exit code is 0 or command contains expected failures
+    [[ $exit_code -eq 0 ]] && return
+    # Don't exit on grep/check failures (expected in conditionals)
+    [[ "$command" =~ (grep|check_|verify_) ]] && return
+    echo -e "\033[1;31m[ERROR]\033[0m Command failed at line $line: $command (exit code: $exit_code)" >&2
+}
 
 # Script URL for updates
 SCRIPT_URL="https://raw.githubusercontent.com/DigneZzZ/remnawave-scripts/main/wtm.sh"
@@ -43,6 +56,27 @@ WARP_CONFIG_FILE="/etc/wireguard/warp.conf"
 TOR_CONFIG_FILE="/etc/tor/torrc"
 WARP_SERVICE="wg-quick@warp"
 TOR_SERVICE="tor"
+LOG_FILE="/var/log/wtm.log"
+
+# ===== DEPENDENCY CHECK =====
+
+check_dependencies() {
+    local missing_deps=()
+    local deps=(curl wget)
+    
+    for cmd in "${deps[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        echo -e "\033[1;31m❌ Missing required dependencies: ${missing_deps[*]}\033[0m" >&2
+        echo "Please install them first or run install command which will install them automatically."
+        return 1
+    fi
+    return 0
+}
 
 # ===== COLOR SETUP =====
 
@@ -166,6 +200,70 @@ error_exit() {
     exit 1
 }
 
+log_action() {
+    local message="$1"
+    if [[ -w "$(dirname "$LOG_FILE")" ]] || [[ -w "$LOG_FILE" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $message" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+# ===== USAGE FUNCTION =====
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [@] <command> [options]
+
+Installation:
+    install-warp          Install Cloudflare WARP
+    install-tor           Install Tor anonymity network
+    install-all           Install both WARP and Tor
+    install-warp-force    Force reinstall WARP
+    install-tor-force     Force reinstall Tor
+    install-all-force     Force reinstall both
+
+Service Control:
+    start-warp            Start WARP service
+    stop-warp             Stop WARP service
+    restart-warp          Restart WARP service
+    start-tor             Start Tor service
+    stop-tor              Stop Tor service
+    restart-tor           Restart Tor service
+
+Monitoring:
+    status                Show services status
+    test                  Test all connections
+    logs <warp|tor>       View service logs
+    warp-memory           WARP memory diagnostic
+    system-info           Show system information
+
+Uninstallation:
+    remove-warp           Uninstall WARP
+    remove-tor            Uninstall Tor
+
+Script Management:
+    install-script        Install wtm globally
+    uninstall-script      Remove global wtm
+    self-update           Update to latest version
+    check-updates         Check for updates
+    version               Show version info
+
+Options:
+    --force, -f           Force operation
+    --help, -h            Show this help
+    --version, -v         Show version
+
+Examples:
+    $(basename "$0") install-all
+    $(basename "$0") @ install-warp --force
+    $(basename "$0") status
+    $(basename "$0") test
+
+Interactive mode:
+    Run without arguments to enter interactive menu.
+
+EOF
+}
+
 # ===== VERSION AND UPDATE FUNCTIONS =====
 
 show_version() {
@@ -180,9 +278,11 @@ show_version() {
 
 check_for_updates() {
     info "Checking for updates..."
-    local remote_script_version=$(curl -s "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | cut -d'"' -f2)
+    # Use comment VERSION for grep-based detection (per project standard)
+    local remote_script_version
+    remote_script_version=$(curl -s "$SCRIPT_URL" 2>/dev/null | grep -m1 "^# VERSION=" | cut -d'=' -f2)
     
-    if [ -z "$remote_script_version" ]; then
+    if [[ -z "$remote_script_version" ]]; then
         warn "Unable to check for updates (no internet connection or invalid URL)"
         return 1
     fi
@@ -204,13 +304,14 @@ update_wtm_script() {
 }
 
 self_update() {
-    if [ "$(id -u)" != "0" ]; then
+    if [[ "$(id -u)" != "0" ]]; then
         error "This operation requires root privileges"
         echo "Please run: sudo wtm self-update"
         exit 1
     fi
     
-    local remote_script_version=$(curl -s "$SCRIPT_URL" 2>/dev/null | grep "^SCRIPT_VERSION=" | cut -d'"' -f2)
+    local remote_script_version
+    remote_script_version=$(curl -s "$SCRIPT_URL" 2>/dev/null | grep -m1 "^# VERSION=" | cut -d'=' -f2)
     
     if [ -z "$remote_script_version" ]; then
         error_exit "Unable to download update (no internet connection)"
@@ -400,9 +501,15 @@ install_warp() {
     mv "$WGCF_BINARY" /usr/local/bin/wgcf
     ok "wgcf $WGCF_VERSION installed"
     
+    # Create temp directory with cleanup
+    local WGCF_TEMP_DIR
+    WGCF_TEMP_DIR=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$WGCF_TEMP_DIR'" EXIT
+    
     # Register and generate config
     info "Registering with Cloudflare WARP..."
-    cd /tmp
+    cd "$WGCF_TEMP_DIR"
     if ! timeout 30 bash -c 'yes | wgcf register' >/dev/null 2>&1; then
         error_exit "Failed to register with WARP"
     fi
@@ -522,12 +629,27 @@ install_tor() {
         cp "$TOR_CONFIG_FILE" "$TOR_CONFIG_FILE.backup"
     fi
     
+    # Generate random control password
+    local TOR_CONTROL_PASSWORD
+    local TOR_HASHED_PASSWORD
+    TOR_CONTROL_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+    # Try to generate hashed password, fallback to cookie auth only if tor not available yet
+    if command -v tor >/dev/null 2>&1; then
+        TOR_HASHED_PASSWORD=$(tor --hash-password "$TOR_CONTROL_PASSWORD" 2>/dev/null || echo "")
+    fi
+    
+    # Save password for reference (secure permissions set below)
+    echo "$TOR_CONTROL_PASSWORD" > /etc/tor/.control_password
+    chmod 600 /etc/tor/.control_password
+    chown debian-tor:debian-tor /etc/tor/.control_password 2>/dev/null || chown tor:tor /etc/tor/.control_password 2>/dev/null || true
+    
     # Create basic Tor configuration
     cat > "$TOR_CONFIG_FILE" <<EOF
 # Tor configuration for proxy mode
+# Control password saved in /etc/tor/.control_password
 SocksPort 9050
 ControlPort 9051
-HashedControlPassword 16:872860B76453A77D60CA2BB8C1A7042072093276A3D701AD684053EC4C
+${TOR_HASHED_PASSWORD:+HashedControlPassword $TOR_HASHED_PASSWORD}
 CookieAuthentication 1
 DataDirectory /var/lib/tor
 Log notice file /var/log/tor/tor.log
@@ -1002,7 +1124,7 @@ show_system_info() {
     printf "${BOLD}${CYAN}Public IP:${NC} $ip\n"
     
     printf "\n${DIM}Press Enter to continue...${NC}"
-    read
+    read -r
 }
 
 # Функция помощи
@@ -1035,7 +1157,7 @@ show_help() {
     printf "• Disable conflicting VPNs\n\n"
     
     printf "${DIM}Press Enter to continue...${NC}"
-    read
+    read -r
 }
 
 # Главное меню в стиле remnanode
@@ -1421,7 +1543,7 @@ show_usage_examples_page() {
     printf "${GREEN}git config --global http.proxy socks5://127.0.0.1:9050${NC}\n\n"
     
     printf "${DIM}Press Enter to continue...${NC}"
-    read
+    read -r
 }
 
 # Команды тестирования (страница 3)
@@ -1456,7 +1578,7 @@ show_testing_commands_page() {
     printf "${GREEN}curl --socks5 127.0.0.1:9050 -o /dev/null -s -w \"%%{time_total}\\n\" https://speedtest.net${NC}\n\n"
     
     printf "${DIM}Press Enter to continue...${NC}"
-    read
+    read -r
 }
 
 # Конфигурация XRay (страница 4)
@@ -1594,7 +1716,7 @@ show_xray_config_page() {
     printf "}${NC}\n\n"
     
     printf "${DIM}Press Enter to continue...${NC}"
-    read
+    read -r
 }
 
 # Функция для тестирования соединений
@@ -2014,7 +2136,7 @@ main() {
                 self_update
                 ;;
             help|--help|-h)
-                show_help
+                usage
                 ;;
             *)
                 error "Unknown command: $COMMAND"
@@ -2190,7 +2312,7 @@ main() {
                 ;;
             *)
                 echo -e "\033[1;31mInvalid option. Press Enter to try again...\033[0m"
-                read
+                read -r
                 ;;
         esac
     done

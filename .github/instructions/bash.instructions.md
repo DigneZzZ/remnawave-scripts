@@ -10,7 +10,7 @@ Every script MUST start with:
 #!/usr/bin/env bash
 # Script: <name>.sh
 # VERSION=X.Y.Z
-set -Eeuo pipefail
+set -Ee pipefail
 
 SCRIPT_VERSION="X.Y.Z"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
