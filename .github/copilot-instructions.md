@@ -1,66 +1,161 @@
 # Copilot Instructions for remnawave-scripts
 
+> **Related docs:** [bash.instructions.md](instructions/bash.instructions.md) | [docs.instructions.md](instructions/docs.instructions.md) | [project.context.md](../docs/project.context.md)
+
+## Repository Info
+
+| Field | Value |
+|-------|-------|
+| **Repository** | `github.com/DigneZzZ/remnawave-scripts` |
+| **Author** | DigneZzZ |
+| **License** | MIT |
+| **Language** | Bash (100%) |
+
 ## Project Overview
-Collection of enterprise-grade Bash scripts for **Remnawave Panel**, **RemnaNode**, and **Reality traffic masking** management. Scripts are designed for Docker-based deployments with backup/restore, Telegram integration, and automated scheduling.
 
-## Key Scripts Architecture
+Enterprise-grade Bash scripts (~25K LOC) for **Remnawave Panel**, **RemnaNode**, and **Reality traffic masking**. Docker-based deployments with backup/restore, Telegram integration, and cron scheduling.
 
-| Script | Purpose | Lines | Key Commands |
-|--------|---------|-------|--------------|
-| `remnawave.sh` | Main panel installer/manager | ~12K | `install`, `up`, `down`, `backup`, `restore`, `caddy`, `schedule` |
-| `remnanode.sh` | Node installer/manager | ~3K | `install`, `up`, `down`, `update` |
-| `selfsteal.sh` | Caddy/Nginx for Reality masking | ~4.4K | Menu-driven |
-| `restore.sh` | Standalone restore utility | ~180 | Interactive |
+## Script Launch Format
 
-## Code Patterns & Conventions
+### One-liner Installation (ALWAYS use this format in docs)
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/SCRIPT.sh) @ COMMAND
+```
 
-### Localization System (remnawave.sh)
-Bilingual EN/RU support using variable-based lookup:
+### Examples
+```bash
+# Remnawave Panel
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone
+
+# RemnaNode
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
+
+# Selfsteal
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh)
+```
+
+### URL Pattern
+```
+https://github.com/DigneZzZ/remnawave-scripts/raw/main/{script}.sh
+```
+
+## ⚠️ Critical Rules
+
+### Docker Compose v2 — MANDATORY
+```bash
+# ✅ ALWAYS use plugin syntax
+docker compose up -d
+docker compose logs -f
+
+# ❌ NEVER use deprecated standalone
+docker-compose up -d  # WRONG
+```
+
+### No Secrets in Code
+- All credentials via `.env` files or environment variables
+- Use `${VAR:-default}` for safe defaults
+- Credential files: `chmod 600`
+
+## Architecture
+
+### Script Structure
+| Script | Lines | Pattern | Entry Point |
+|--------|-------|---------|-------------|
+| `remnawave.sh` | ~12.8K | CLI commands | `main()` at EOF |
+| `remnanode.sh` | ~3.5K | CLI commands | `main()` at EOF |
+| `selfsteal.sh` | ~4.8K | Interactive menu | `main_menu()` |
+
+### Function Naming
+```bash
+*_command()     # CLI entry: install_command(), backup_command()
+*_menu()        # Interactive: main_menu(), caddy_menu()
+check_*()       # Validation: check_dependencies(), check_docker()
+print_*()       # Output: print_info(), print_error()
+```
+
+### Localization System
+~200 translation keys using variable lookup:
 ```bash
 L_en_MENU_TITLE="Main Menu"
 L_ru_MENU_TITLE="Главное меню"
-L() { local var_name="L_${MENU_LANG}_${1}"; echo "${!var_name:-$1}"; }
+L() { local var="L_${MENU_LANG}_${1}"; echo "${!var:-$1}"; }
 # Usage: echo "$(L MENU_TITLE)"
 ```
 
-### Docker Compose Generation
-Generated docker-compose.yml uses YAML anchors for DRY:
+### Version Tracking (dual system)
+```bash
+# VERSION=5.8.0          # grep-based detection for remote updates
+SCRIPT_VERSION="5.8.0"   # Runtime variable
+```
+
+## Docker Compose Generation
+
+### Heredoc Escaping Rules
+When generating `docker-compose.yml` in heredocs:
+```bash
+# ${VAR}      → Bash substitutes NOW (container names, ports)
+# \${VAR}     → Writes ${VAR} → docker compose reads from .env
+# \$\${VAR}   → Writes $${VAR} → passed to container shell
+```
+
+### Service Dependencies
+```
+PostgreSQL (:6767→5432) ──┬──→ remnawave (:3000) ──→ subscription-page (:3010)
+Redis                   ──┘
+```
+
+### YAML Anchors Pattern
 ```yaml
 x-common: &common
     ulimits: { nofile: { soft: 1048576, hard: 1048576 } }
     restart: always
-    networks: [ ${APP_NAME}-network ]
 ```
 
-**Critical escaping rules in heredocs:**
-- `${VAR}` → Bash substitutes at generation time (container names, host ports)
-- `\${VAR}` → Writes `${VAR}` literally → docker-compose reads from .env
-- `\$\${VAR}` → Writes `$${VAR}` → docker-compose passes `${VAR}` to container shell
+## Key Commands
 
-### Version Management
-Each script has dual version tracking:
 ```bash
-# VERSION=5.7.0          # Comment for grep-based detection
-SCRIPT_VERSION="5.7.0"   # Runtime variable
+# Installation
+remnawave install [--dev] [--name custom]
+remnanode install [--force]
+
+# Operations
+remnawave up|down|restart|status|logs
+remnawave backup [--compress] [--telegram]
+remnawave restore <file>
+remnawave caddy install|up|down|logs
+
+# Development
+shellcheck *.sh                    # Lint all scripts
+bash -n script.sh                  # Syntax check
+./remnawave.sh --help              # Show usage
 ```
 
-### CLI Command Structure
-Scripts use positional command pattern:
+## Files Generated
+
+| Path | Purpose |
+|------|---------|
+| `/opt/remnawave/.env` | Main panel config |
+| `/opt/remnawave/.env.subscription` | Subscription page config |
+| `/opt/remnawave/docker-compose.yml` | Container orchestration |
+| `/opt/remnawave/admin-credentials.txt` | Auto-generated creds |
+| `/opt/remnawave/backup-config.json` | Scheduled backup settings |
+
+## Common Patterns
+
+### Idempotent Operations
 ```bash
-remnawave <command> [--flags]
-# Commands: install, up, down, restart, backup, restore, caddy, schedule, etc.
+[[ -d "$DIR" ]] || mkdir -p "$DIR"
+docker network create "$NET" 2>/dev/null || true
 ```
 
-### Function Naming Conventions
-- `*_command()` — CLI entry points (e.g., `install_command`, `backup_command`)
-- `*_menu()` — Interactive menu handlers
-- `schedule_*()` — Cron/scheduling related
-- `subpage_*()` — Subscription page management
+### User Prompts with Defaults
+```bash
+read -rp "Enter port [3000]: " port
+port="${port:-3000}"
+```
 
-## Critical Implementation Details
-
-### Healthcheck for remnawave container
-Uses curl to METRICS_PORT endpoint:
+### Container Health Checks
 ```yaml
 healthcheck:
     test: ['CMD-SHELL', 'curl -f http://localhost:${METRICS_PORT:-3001}/health']
@@ -68,33 +163,46 @@ healthcheck:
     start_period: 30s
 ```
 
-### Service Dependencies
+## Testing
+
+- Target: Ubuntu 22.04+, Debian 12+
+- Required: Docker with Compose v2 plugin
+- Validate: `shellcheck --severity=warning *.sh`
+- Use `--dev` flag for development images
+
+## Telegram Integration
+
+Backup system supports Telegram notifications via `backup-config.json`:
+
+```json
+{
+  "telegram": {
+    "enabled": true,
+    "bot_token": "123456:ABC-DEF...",
+    "chat_id": "-1001234567890",
+    "thread_id": null,
+    "api_server": "https://api.telegram.org",
+    "send_files": true
+  }
+}
 ```
-remnawave-db (postgres) ← remnawave (backend) ← remnawave-subscription-page
-remnawave-redis ←────────┘
+
+### Key Features
+- **Large file support**: Auto-splits files >50MB into chunks
+- **Thread support**: Use `thread_id` for topic-based group chats
+- **Test delivery**: `remnawave schedule test-telegram`
+- **Scheduled backups**: Automatic Telegram delivery via cron
+
+### API Calls Pattern
+```bash
+curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+    -F "chat_id=${CHAT_ID}" \
+    -F "document=@${FILE_PATH}" \
+    -F "caption=${MESSAGE}"
 ```
 
-### Default Ports
-- Panel: 3000 (APP_PORT)
-- Metrics: 3001 (METRICS_PORT)  
-- Subscription: 3010 (SUB_PAGE_PORT)
-- PostgreSQL: 6767 (host) → 5432 (container)
+## Upstream Sync
 
-## Files Generated During Installation
-| File | Purpose |
-|------|---------|
-| `/opt/remnawave/.env` | Main panel environment |
-| `/opt/remnawave/.env.subscription` | Subscription page environment |
-| `/opt/remnawave/docker-compose.yml` | Container orchestration |
-| `/opt/remnawave/admin-credentials.txt` | Auto-generated admin creds |
-| `/opt/remnawave/backup-config.json` | Scheduled backup settings |
-
-## Testing Considerations
-- Scripts are designed for Linux; test on Ubuntu 22.04+ or Debian 12+
-- Docker and Docker Compose v2 required
-- Use `--dev` flag with install for development branch images
-
-## Common Modifications
-When updating docker-compose template, sync with official:
+When updating docker-compose templates, sync with:
 - https://github.com/remnawave/backend/blob/main/docker-compose-prod.yml
 - https://github.com/remnawave/backend/blob/main/.env.sample
