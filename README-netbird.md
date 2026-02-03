@@ -20,6 +20,9 @@ A simple script for quick NetBird installation and connection on Linux servers. 
 - 🔐 SSH access between servers (`--ssh`)
 - 🔥 Auto-firewall configuration (UFW/firewalld)
 - 📦 Supports Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
+- ✅ Setup key format validation
+- 🔍 Connection verification after install
+- ⚡ Force mode — no prompts (`--force/-f`)
 
 ### Quick Start
 
@@ -184,6 +187,7 @@ netbird_setup_key: "YOUR-SETUP-KEY-HERE"
 - 🤖 Режим для Ansible (без цветов, минимум вывода)
 - 🔑 Setup key через CLI или переменную окружения
 - 🔐 SSH доступ между серверами (`--ssh`)
+- 🔥 Авто-настройка файрвола (UFW/firewalld)
 - 📦 Поддержка Ubuntu, Debian, CentOS, RHEL, Fedora, Rocky, Alma
 - 🔄 Команда обновления (`update`)
 - 📝 Логирование в файл (`--log FILE`)

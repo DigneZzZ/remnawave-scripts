@@ -1,7 +1,18 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Script: netbird.sh
+# VERSION=1.4.1
+set -Ee pipefail
 
-# VERSION=1.4.0
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Error handler
+error_handler() {
+    local exit_code=$1 line=$2 command=$3
+    echo "ERROR: Command '$command' failed with exit code $exit_code at line $line" >&2
+    exit "$exit_code"
+}
+trap 'error_handler $? $LINENO "$BASH_COMMAND"' ERR
 
 # Mode: cli (default), ansible (quiet, no colors), init (auto-install)
 RUN_MODE="cli"
@@ -111,7 +122,7 @@ check_tun_device() {
 }
 
 # Validate setup key format (UUID-like)
-validate_setup_key() {
+validate_setup_key_format() {
     local key="$1"
     # Check if key looks like UUID (8-4-4-4-12 or similar formats)
     if [[ ! "$key" =~ ^[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}$ ]] && \
@@ -161,6 +172,19 @@ check_os() {
     else
         print_error "Не удалось определить операционную систему"
         exit 1
+    fi
+}
+
+# Check required tools before installation
+check_dependencies() {
+    local missing=()
+    for cmd in curl; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        print_warning "Отсутствуют: ${missing[*]}. Будут установлены..."
     fi
 }
 
@@ -341,7 +365,7 @@ connect_netbird() {
     fi
     
     # Validate setup key format
-    validate_setup_key "$setup_key"
+    validate_setup_key_format "$setup_key"
     
     # Add SSH options if enabled
     if [[ "$ENABLE_SSH" == "true" ]]; then
@@ -666,7 +690,8 @@ run_init_mode() {
 
 # ==================== CLI Mode ====================
 
-validate_setup_key() {
+# Require setup key to be set (exit if missing)
+require_setup_key() {
     if [[ -z "$SETUP_KEY" ]]; then
         print_error "Setup key обязателен!"
         echo ""
@@ -679,7 +704,7 @@ validate_setup_key() {
 run_cli_mode() {
     case $COMMAND in
         install)
-            validate_setup_key
+            require_setup_key
             print_banner
             check_root
             check_os
@@ -695,7 +720,7 @@ run_cli_mode() {
             update_netbird
             ;;
         connect)
-            validate_setup_key
+            require_setup_key
             print_banner
             check_root
             connect_netbird "$SETUP_KEY"

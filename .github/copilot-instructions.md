@@ -57,6 +57,25 @@ docker-compose up -d  # WRONG
 - Use `${VAR:-default}` for safe defaults
 - Credential files: `chmod 600`
 
+### README Sync — MANDATORY
+When modifying or improving any script, **always update its corresponding README** file if it exists.
+
+| Script | README |
+|--------|--------|
+| `remnawave.sh` | `README.md` + `README_RU.md` |
+| `remnanode.sh` | `README.md` (section) |
+| `selfsteal.sh` | `README-selfsteal.md` |
+| `netbird.sh` | `README-netbird.md` |
+| `wtm.sh` | `README-warp.md` |
+| `remnawave-backup.sh` | `README.md` (section) |
+| `restore.sh` | `README.md` (section) |
+
+**Update checklist:**
+- Sync feature lists (EN/RU versions must match)
+- Update version references if changed
+- Add new CLI options/commands to tables
+- Update examples if behavior changed
+
 ## Architecture
 
 ### Script Structure
