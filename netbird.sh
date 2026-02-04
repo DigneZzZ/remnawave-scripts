@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Script: netbird.sh
-# VERSION=1.4.1
-set -Ee pipefail
+# VERSION=1.4.2
+set -Eeo pipefail
 
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.4.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Error handler
