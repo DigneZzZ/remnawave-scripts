@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.4
+# VERSION=5.8.5
 
-SCRIPT_VERSION="5.8.4"
+SCRIPT_VERSION="5.8.5"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -5371,13 +5371,27 @@ restore_full_from_archive() {
             mkdir -p "$caddy_target"
         fi
         
-        # Копируем файлы Caddy
+        # Копируем файлы Caddy (включая dot-файлы как .env)
         local caddy_restored=0
+        
+        # Сначала копируем dot-файлы (не матчатся обычным *)
+        for caddy_file in "$target_dir/caddy"/.*; do
+            if [ -f "$caddy_file" ]; then
+                local filename=$(basename "$caddy_file")
+                # Пропускаем . и ..
+                [[ "$filename" == "." || "$filename" == ".." ]] && continue
+                cp "$caddy_file" "$caddy_target/" 2>/dev/null && caddy_restored=$((caddy_restored + 1))
+                echo -e "\033[38;5;244m   Restored: $filename\033[0m"
+            fi
+        done
+        
+        # Затем обычные файлы
         for caddy_file in "$target_dir/caddy"/*; do
             if [ -f "$caddy_file" ]; then
                 local filename=$(basename "$caddy_file")
                 if [ "$filename" != "caddy-info.txt" ]; then
                     cp "$caddy_file" "$caddy_target/" 2>/dev/null && caddy_restored=$((caddy_restored + 1))
+                    echo -e "\033[38;5;244m   Restored: $filename\033[0m"
                 fi
             fi
         done
@@ -5386,8 +5400,19 @@ restore_full_from_archive() {
             echo -e "\033[1;32m✅ Caddy configuration restored ($caddy_restored files to $caddy_target)\033[0m"
             log_restore_operation "Caddy Restore" "SUCCESS" "Caddy restored: $caddy_restored files"
             
-            # Показываем подсказку о перезапуске Caddy
-            echo -e "\033[38;5;244m   💡 Restart Caddy: cd $caddy_target && docker compose restart\033[0m"
+            # Проверяем что критичные файлы на месте
+            local caddy_missing=""
+            [ ! -f "$caddy_target/.env" ] && caddy_missing="${caddy_missing} .env"
+            [ ! -f "$caddy_target/docker-compose.yml" ] && caddy_missing="${caddy_missing} docker-compose.yml"
+            [ ! -f "$caddy_target/Caddyfile" ] && caddy_missing="${caddy_missing} Caddyfile"
+            
+            if [ -n "$caddy_missing" ]; then
+                echo -e "\033[1;33m⚠️  Missing Caddy files:${caddy_missing}\033[0m"
+                echo -e "\033[38;5;244m   Caddy may not start. Reinstall with: remnawave caddy install\033[0m"
+                log_restore_operation "Caddy Restore" "WARNING" "Missing files:${caddy_missing}"
+            else
+                echo -e "\033[38;5;244m   💡 Start Caddy: remnawave caddy up\033[0m"
+            fi
         else
             echo -e "\033[1;33m⚠️  No Caddy files were restored\033[0m"
             log_restore_operation "Caddy Restore" "WARNING" "No files restored"
@@ -5428,8 +5453,19 @@ restore_full_from_archive() {
             mkdir -p "$traefik_target"
         fi
         
-        # Копируем файлы Traefik
+        # Копируем файлы Traefik (включая dot-файлы как .env)
         local traefik_restored=0
+        
+        # Сначала dot-файлы
+        for traefik_file in "$target_dir/traefik"/.*; do
+            if [ -f "$traefik_file" ]; then
+                local filename=$(basename "$traefik_file")
+                [[ "$filename" == "." || "$filename" == ".." ]] && continue
+                cp "$traefik_file" "$traefik_target/" 2>/dev/null && traefik_restored=$((traefik_restored + 1))
+            fi
+        done
+        
+        # Затем обычные файлы и директории
         for traefik_file in "$target_dir/traefik"/*; do
             if [ -f "$traefik_file" ]; then
                 local filename=$(basename "$traefik_file")
