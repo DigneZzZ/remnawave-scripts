@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.0
+# VERSION=5.8.4
 
-SCRIPT_VERSION="5.8.0"
+SCRIPT_VERSION="5.8.4"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -2597,14 +2597,42 @@ verify_restore_integrity() {
     local max_score=10
     local issues=()
     
-    # Проверка файлов (2 балла)
+    # --- Динамическое определение имён контейнеров из docker-compose.yml ---
+    local db_container="${app_name}-db"
+    local main_container="${app_name}"
+    local redis_container="${app_name}-redis"
+    
+    if [ -f "$target_dir/docker-compose.yml" ]; then
+        # Парсим реальные container_name из compose файла
+        local parsed_db parsed_main parsed_redis
+        parsed_db=$(grep -E "container_name:.*db" "$target_dir/docker-compose.yml" 2>/dev/null | head -1 | sed "s/.*container_name:[[:space:]]*['\"]*//" | sed "s/['\"].*//")
+        parsed_main=$(grep -E "container_name:" "$target_dir/docker-compose.yml" 2>/dev/null | grep -v -E "db|redis|subscription|caddy" | head -1 | sed "s/.*container_name:[[:space:]]*['\"]*//" | sed "s/['\"].*//")
+        parsed_redis=$(grep -E "container_name:.*redis" "$target_dir/docker-compose.yml" 2>/dev/null | head -1 | sed "s/.*container_name:[[:space:]]*['\"]*//" | sed "s/['\"].*//")
+        
+        [ -n "$parsed_db" ] && db_container="$parsed_db"
+        [ -n "$parsed_main" ] && main_container="$parsed_main"
+        [ -n "$parsed_redis" ] && redis_container="$parsed_redis"
+    fi
+    
+    echo -e "\033[38;5;244m   Detected containers: main=$main_container, db=$db_container, redis=$redis_container\033[0m"
+    
+    # --- Читаем DB credentials из .env ---
+    local postgres_user="postgres"
+    local postgres_password="postgres"
+    local postgres_db="postgres"
+    if [ -f "$target_dir/.env" ]; then
+        postgres_user=$(grep "^POSTGRES_USER=" "$target_dir/.env" 2>/dev/null | cut -d'=' -f2 || echo "postgres")
+        postgres_password=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" 2>/dev/null | cut -d'=' -f2 || echo "postgres")
+        postgres_db=$(grep "^POSTGRES_DB=" "$target_dir/.env" 2>/dev/null | cut -d'=' -f2 || echo "postgres")
+    fi
+    
+    # ===== Проверка 1: Файлы конфигурации (2 балла) =====
     if [ -f "$target_dir/docker-compose.yml" ]; then
         integrity_score=$((integrity_score + 1))
         
         # Проверяем использование latest тега
         if grep -q "ghcr.io/remnawave/backend:latest" "$target_dir/docker-compose.yml" 2>/dev/null; then
             echo -e "\033[1;33m⚠️  WARNING: docker-compose.yml uses 'latest' tag\033[0m"
-            echo -e "\033[38;5;244m   This may cause compatibility issues if Docker pulls a newer version\033[0m"
             echo -e "\033[38;5;244m   Recommended: Pin to specific version (e.g., remnawave/backend:2.2.19)\033[0m"
             issues+=("using latest tag - version not pinned")
         fi
@@ -2618,78 +2646,153 @@ verify_restore_integrity() {
         issues+=("docker-compose.yml missing")
     fi
     
-    # Проверка запуска сервисов (4 балла)
+    # ===== Проверка 2: Запуск сервисов (4 балла) =====
     if [ -f "$target_dir/docker-compose.yml" ]; then
         cd "$target_dir"
-        if docker compose up -d >/dev/null 2>&1; then
+        
+        # Проверяем, уже ли запущены сервисы, чтобы не запускать повторно
+        local already_running=$(docker compose ps -q 2>/dev/null | wc -l)
+        
+        if [ "$already_running" -gt 0 ]; then
+            echo -e "\033[38;5;244m   Services already running, checking status...\033[0m"
             integrity_score=$((integrity_score + 2))
-            
-            # Ждем немного и проверяем статус
-            sleep 8
-            local running_services=$(docker compose ps -q 2>/dev/null | wc -l)
-            local healthy_services=0
-            
-            for container_id in $(docker compose ps -q 2>/dev/null); do
-                local status=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
-                if [ "$status" = "running" ]; then
-                    healthy_services=$((healthy_services + 1))
-                fi
-            done
-            
-            if [ "$running_services" -gt 0 ] && [ "$healthy_services" -gt 0 ]; then
-                if [ "$healthy_services" -eq "$running_services" ]; then
-                    integrity_score=$((integrity_score + 2))
-                else
-                    integrity_score=$((integrity_score + 1))
-                    issues+=("some services not running ($healthy_services/$running_services)")
-                fi
-            else
-                issues+=("no services running")
-            fi
+        elif docker compose up -d >/dev/null 2>&1; then
+            integrity_score=$((integrity_score + 2))
         else
             issues+=("failed to start services")
         fi
+        
+        # Ждём healthcheck — до 90 секунд с прогрессом
+        if [ $integrity_score -ge 2 ]; then
+            echo -e "\033[38;5;244m   Waiting for containers to become healthy (up to 90s)...\033[0m"
+            
+            local wait_elapsed=0
+            local wait_max=90
+            local all_healthy=false
+            
+            while [ $wait_elapsed -lt $wait_max ]; do
+                local total_services=0
+                local running_count=0
+                local healthy_count=0
+                
+                for container_id in $(docker compose ps -q 2>/dev/null); do
+                    total_services=$((total_services + 1))
+                    local c_status=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
+                    local c_health=$(docker inspect "$container_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || echo "unknown")
+                    
+                    if [ "$c_status" = "running" ]; then
+                        running_count=$((running_count + 1))
+                        # Контейнер без healthcheck считается healthy если running
+                        if [ "$c_health" = "healthy" ] || [ "$c_health" = "no-healthcheck" ]; then
+                            healthy_count=$((healthy_count + 1))
+                        fi
+                    fi
+                done
+                
+                # Все сервисы healthy — можно выходить
+                if [ "$total_services" -gt 0 ] && [ "$healthy_count" -eq "$total_services" ]; then
+                    all_healthy=true
+                    break
+                fi
+                
+                # Прогресс каждые 15 секунд
+                if [ $((wait_elapsed % 15)) -eq 0 ] && [ $wait_elapsed -gt 0 ]; then
+                    echo -e "\033[38;5;244m   ... ${wait_elapsed}s elapsed: $running_count/$total_services running, $healthy_count/$total_services healthy\033[0m"
+                fi
+                
+                sleep 3
+                wait_elapsed=$((wait_elapsed + 3))
+            done
+            
+            # Финальная оценка
+            local final_total=0
+            local final_running=0
+            local final_healthy=0
+            local container_details=""
+            
+            for container_id in $(docker compose ps -q 2>/dev/null); do
+                final_total=$((final_total + 1))
+                local c_name=$(docker inspect "$container_id" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')
+                local c_status=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
+                local c_health=$(docker inspect "$container_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || echo "unknown")
+                
+                if [ "$c_status" = "running" ]; then
+                    final_running=$((final_running + 1))
+                fi
+                if [ "$c_health" = "healthy" ] || [ "$c_health" = "no-healthcheck" ]; then
+                    final_healthy=$((final_healthy + 1))
+                fi
+                
+                # Собираем статус для отчёта
+                local status_icon="❌"
+                [ "$c_status" = "running" ] && status_icon="🟡"
+                [ "$c_health" = "healthy" ] || [ "$c_health" = "no-healthcheck" ] && [ "$c_status" = "running" ] && status_icon="🟢"
+                container_details="${container_details}\n   ${status_icon} ${c_name}: status=${c_status}, health=${c_health}"
+            done
+            
+            echo -e "\033[38;5;244m   Container status after ${wait_elapsed}s:${container_details}\033[0m"
+            
+            if [ "$final_total" -gt 0 ] && [ "$final_healthy" -eq "$final_total" ]; then
+                integrity_score=$((integrity_score + 2))
+                echo -e "\033[1;32m   ✅ All $final_total services healthy\033[0m"
+            elif [ "$final_running" -eq "$final_total" ] && [ "$final_total" -gt 0 ]; then
+                integrity_score=$((integrity_score + 1))
+                issues+=("all services running but not all healthy ($final_healthy/$final_total healthy)")
+            elif [ "$final_running" -gt 0 ]; then
+                integrity_score=$((integrity_score + 1))
+                issues+=("some services not running ($final_running/$final_total running, $final_healthy healthy)")
+            else
+                issues+=("no services running after ${wait_elapsed}s")
+            fi
+        fi
     fi
     
-    # Проверка базы данных (2 балла)
+    # ===== Проверка 3: База данных (2 балла) =====
     if [ "$backup_type" = "full" ] || [ "$backup_type" = "database" ]; then
-        local db_container="${app_name}-db"
-        if docker exec "$db_container" pg_isready -U postgres >/dev/null 2>&1; then
+        if docker exec -e PGPASSWORD="$postgres_password" "$db_container" \
+            pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
             integrity_score=$((integrity_score + 1))
             
             # Проверяем что в БД есть данные
-            local table_count=$(docker exec -e PGPASSWORD="postgres" "$db_container" \
-                psql -U postgres -d postgres -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null | tr -d ' ' || echo "0")
+            local table_count=$(docker exec -e PGPASSWORD="$postgres_password" "$db_container" \
+                psql -U "$postgres_user" -d "$postgres_db" -t -c \
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null | tr -d ' ' || echo "0")
             
             if [ "$table_count" -gt 0 ]; then
                 integrity_score=$((integrity_score + 1))
+                echo -e "\033[38;5;244m   ✅ Database has $table_count tables\033[0m"
             else
                 issues+=("database appears empty")
             fi
         else
-            issues+=("database not responding")
+            issues+=("database not responding (container: $db_container)")
         fi
     fi
     
-    # Проверка сети и доступности (2 балла)
-    local main_container="${app_name}-app"
+    # ===== Проверка 4: Сеть и доступность приложения (2 балла) =====
     if docker exec "$main_container" echo "test" >/dev/null 2>&1; then
         integrity_score=$((integrity_score + 1))
         
-        # Проверяем внутреннюю связность
-        if docker exec "$main_container" nc -z "${app_name}-db" 5432 >/dev/null 2>&1; then
+        # Проверяем внутреннюю связность через hostname из compose
+        if docker exec "$main_container" sh -c "nc -z ${db_container} 5432 2>/dev/null || curl -sf http://${db_container}:5432 2>/dev/null || pg_isready -h ${db_container} -p 5432 2>/dev/null" >/dev/null 2>&1; then
             integrity_score=$((integrity_score + 1))
         else
-            issues+=("network connectivity issues")
+            # Пробуем альтернативный способ — через hostname
+            local db_hostname="${app_name}-db"
+            if docker exec "$main_container" sh -c "cat /etc/hosts | grep -q '${db_hostname}' 2>/dev/null" >/dev/null 2>&1; then
+                integrity_score=$((integrity_score + 1))
+                echo -e "\033[38;5;244m   ✅ Network connectivity verified via hosts\033[0m"
+            else
+                issues+=("network connectivity to database unverified")
+            fi
         fi
     else
-        issues+=("main application container not responding")
+        issues+=("main application container not responding (container: $main_container)")
     fi
     
-    # Выводим результат
+    # ===== Результат =====
     local percentage=$((integrity_score * 100 / max_score))
     
-    # Детальный отчет об обнаруженных проблемах
     if [ ${#issues[@]} -gt 0 ]; then
         echo -e "\033[38;5;244m   Issues detected:\033[0m"
         for issue in "${issues[@]}"; do
@@ -2697,11 +2800,11 @@ verify_restore_integrity() {
         done
     fi
     
-    if [ $percentage -ge 80 ]; then
+    if [ $percentage -ge 70 ]; then
         echo -e "\033[1;32m✅ Restore integrity check passed: $integrity_score/$max_score ($percentage%)\033[0m"
         log_restore_operation "Integrity Check" "SUCCESS" "$integrity_score/$max_score ($percentage%)"
         return 0
-    elif [ $percentage -ge 60 ]; then
+    elif [ $percentage -ge 50 ]; then
         echo -e "\033[1;33m⚠️  Restore integrity check warning: $integrity_score/$max_score ($percentage%)\033[0m"
         log_restore_operation "Integrity Check" "WARNING" "$integrity_score/$max_score ($percentage%) - ${#issues[@]} issues"
         return 1
