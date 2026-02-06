@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.7.0
+# VERSION=2.7.1
 
-SCRIPT_VERSION="2.7.0"
+SCRIPT_VERSION="2.7.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -92,6 +92,7 @@ NGINX_VERSION="1.29.3-alpine"
 APP_NAME="selfsteal"
 APP_DIR=""
 HTML_DIR=""
+LOGS_DIR=""
 LOG_FILE="/var/log/selfsteal.log"
 
 # Default Settings
@@ -1228,6 +1229,7 @@ init_web_server_config() {
             VOLUME_PREFIX="nginx"
             APP_DIR="/opt/nginx-selfsteal"
             HTML_DIR="/opt/nginx-selfsteal/html"
+            LOGS_DIR="/var/log/nginx"
             WEB_SERVER_CONFIG_FILE="nginx.conf"
             ;;
         caddy|*)
@@ -1235,6 +1237,7 @@ init_web_server_config() {
             VOLUME_PREFIX="caddy"
             APP_DIR="/opt/caddy"
             HTML_DIR="/opt/caddy/html"
+            LOGS_DIR="/var/log/caddy"
             WEB_SERVER_CONFIG_FILE="Caddyfile"
             ;;
     esac
@@ -1703,7 +1706,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ${HTML_DIR}:/var/www/html
-      - ./logs:/var/log/caddy
+      - ${LOGS_DIR}:/var/log/caddy
       - ./ssl:/etc/caddy/ssl:ro
       - ${VOLUME_PREFIX}_data:/data
       - ${VOLUME_PREFIX}_config:/config
@@ -1731,7 +1734,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ${HTML_DIR}:/var/www/html
-      - ./logs:/var/log/caddy
+      - ${LOGS_DIR}:/var/log/caddy
       - ${VOLUME_PREFIX}_data:/data
       - ${VOLUME_PREFIX}_config:/config
     env_file:
@@ -2096,7 +2099,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./conf.d:/etc/nginx/conf.d:ro
       - ${HTML_DIR}:/var/www/html:ro
-      - ./logs:/var/log/nginx
+      - ${LOGS_DIR}:/var/log/nginx
       - ./ssl:/etc/nginx/ssl:ro
       - /dev/shm:/dev/shm
     env_file:
@@ -2120,7 +2123,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./conf.d:/etc/nginx/conf.d:ro
       - ${HTML_DIR}:/var/www/html:ro
-      - ./logs:/var/log/nginx
+      - ${LOGS_DIR}:/var/log/nginx
       - ./ssl:/etc/nginx/ssl:ro
     env_file:
       - .env
@@ -2683,7 +2686,7 @@ install_command() {
     
     create_dir_safe "$APP_DIR" || return 1
     create_dir_safe "$HTML_DIR" || return 1
-    create_dir_safe "$APP_DIR/logs" || return 1
+    create_dir_safe "$LOGS_DIR" || return 1
     
     log_success "Directories created"
 
@@ -3961,7 +3964,7 @@ clean_logs_command() {
     echo -e "${GRAY}   Docker logs: ${WHITE}${docker_logs_size}KB${NC}"
     
     # Server access logs
-    local server_logs_path="$APP_DIR/logs"
+    local server_logs_path="$LOGS_DIR"
     if [ -d "$server_logs_path" ]; then
         local server_logs_size
         server_logs_size=$(du -sk "$server_logs_path" 2>/dev/null | cut -f1 || echo "0")
@@ -4029,14 +4032,14 @@ logs_size_command() {
     fi
     
     # Logs directory
-    if [ -d "$APP_DIR/logs" ]; then
+    if [ -d "$LOGS_DIR" ]; then
         local logs_dir_size
-        logs_dir_size=$(du -sk "$APP_DIR/logs" 2>/dev/null | cut -f1 || echo "0")
+        logs_dir_size=$(du -sk "$LOGS_DIR" 2>/dev/null | cut -f1 || echo "0")
         echo -e "${WHITE}📁 Logs directory:${NC} ${GRAY}${logs_dir_size}KB${NC}"
         
         # List individual log files
         local log_files
-        log_files=$(find "$APP_DIR/logs" -name "*.log*" -type f 2>/dev/null)
+        log_files=$(find "$LOGS_DIR" -name "*.log*" -type f 2>/dev/null)
         if [ -n "$log_files" ]; then
             echo -e "${GRAY}   Log files:${NC}"
             while IFS= read -r log_file; do
