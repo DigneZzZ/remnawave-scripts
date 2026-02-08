@@ -92,7 +92,6 @@ NGINX_VERSION="1.29.3-alpine"
 APP_NAME="selfsteal"
 APP_DIR=""
 HTML_DIR=""
-LOGS_DIR=""
 LOG_FILE="/var/log/selfsteal.log"
 
 # Default Settings
@@ -702,6 +701,45 @@ find_available_acme_port() {
     return 0
 }
 
+# Helper: setup iptables redirect from 443 to acme_port (TLS-ALPN-01 requires port 443)
+setup_acme_port_redirect() {
+    local target_port="$1"
+    if [ "$target_port" != "443" ]; then
+        log_info "Setting up port redirect 443 → $target_port for TLS-ALPN challenge..."
+        iptables -t nat -I PREROUTING 1 -p tcp --dport 443 -j REDIRECT --to-port "$target_port" 2>/dev/null || true
+        iptables -t nat -I OUTPUT 1 -p tcp --dport 443 -o lo -j REDIRECT --to-port "$target_port" 2>/dev/null || true
+    fi
+}
+
+# Helper: remove iptables redirect
+cleanup_acme_port_redirect() {
+    local target_port="$1"
+    if [ "$target_port" != "443" ]; then
+        iptables -t nat -D PREROUTING -p tcp --dport 443 -j REDIRECT --to-port "$target_port" 2>/dev/null || true
+        iptables -t nat -D OUTPUT -p tcp --dport 443 -o lo -j REDIRECT --to-port "$target_port" 2>/dev/null || true
+    fi
+}
+
+# Helper: read Le_TLSPort from acme.sh domain config
+get_acme_tls_port() {
+    local domain="$1"
+    local acme_home="${ACME_HOME:-$HOME/.acme.sh}"
+    local domain_conf="$acme_home/${domain}/${domain}.conf"
+    
+    if [ -f "$domain_conf" ]; then
+        local saved_port
+        saved_port=$(grep "^Le_TLSPort=" "$domain_conf" 2>/dev/null | cut -d"'" -f2 | tr -d '"')
+        if [ -n "$saved_port" ]; then
+            echo "$saved_port"
+            return 0
+        fi
+    fi
+    
+    # Fallback to ACME_PORT or default
+    echo "${ACME_PORT:-443}"
+    return 0
+}
+
 # Issue SSL certificate for domain using TLS-ALPN
 issue_ssl_certificate() {
     local domain="$1"
@@ -824,98 +862,94 @@ issue_ssl_certificate() {
         reload_cmd="docker exec $CONTAINER_NAME nginx -s reload 2>/dev/null || true"
     fi
     
-    # Issue certificate using standalone + alpn
-    log_info "Issuing certificate via TLS-ALPN on port $acme_port..."
-    echo -e "${GRAY}This may take a minute...${NC}"
-    
-    local acme_args=(
-        --issue
-        --standalone
-        -d "$domain"
-        --key-file "$ssl_dir/private.key"
-        --fullchain-file "$ssl_dir/fullchain.crt"
-        --alpn
-        --tlsport "$acme_port"
-        --server letsencrypt
-        --force
-        --debug 2
-    )
-    
-    # Add reload command only if container exists
-    if [ -n "$reload_cmd" ]; then
-        acme_args+=(--reloadcmd "$reload_cmd")
-    fi
-    
-    local acme_output
-    acme_output=$("$ACME_HOME/acme.sh" "${acme_args[@]}" 2>&1) || true
-    local acme_exit_code=$?
-    
-    if [ $acme_exit_code -eq 0 ]; then
-        log_success "Certificate issued and installed successfully (port $acme_port)"
+    # Helper: attempt certificate issuance on a given port
+    _try_issue_cert() {
+        local try_port="$1"
+        local try_domain="$2"
+        local try_ssl_dir="$3"
+        local try_reload_cmd="$4"
         
-        # Set proper permissions
-        chmod 600 "$ssl_dir/private.key" 2>/dev/null || true
-        chmod 644 "$ssl_dir/fullchain.crt" 2>/dev/null || true
+        log_info "Issuing certificate via TLS-ALPN on port $try_port..."
+        echo -e "${GRAY}This may take a minute...${NC}"
         
+        local try_args=(
+            --issue
+            --standalone
+            -d "$try_domain"
+            --key-file "$try_ssl_dir/private.key"
+            --fullchain-file "$try_ssl_dir/fullchain.crt"
+            --alpn
+            --tlsport "$try_port"
+            --server letsencrypt
+            --force
+            --debug 2
+        )
+        
+        if [ -n "$try_reload_cmd" ]; then
+            try_args+=(--reloadcmd "$try_reload_cmd")
+        fi
+        
+        # Setup iptables redirect: Let's Encrypt connects to 443, redirect to acme_port
+        setup_acme_port_redirect "$try_port"
+        
+        local try_output
+        local try_exit_code
+        try_output=$("$ACME_HOME/acme.sh" "${try_args[@]}" 2>&1) && try_exit_code=0 || try_exit_code=$?
+        
+        # Always cleanup iptables redirect
+        cleanup_acme_port_redirect "$try_port"
+        
+        if [ $try_exit_code -eq 0 ] && [ -f "$try_ssl_dir/private.key" ] && [ -f "$try_ssl_dir/fullchain.crt" ]; then
+            log_success "Certificate issued and installed successfully (port $try_port)"
+            chmod 600 "$try_ssl_dir/private.key" 2>/dev/null || true
+            chmod 644 "$try_ssl_dir/fullchain.crt" 2>/dev/null || true
+            return 0
+        elif [ $try_exit_code -eq 0 ]; then
+            log_error "acme.sh reported success but certificate files were not created"
+            echo -e "${YELLOW}Expected files:${NC}"
+            echo -e "  Key:  $try_ssl_dir/private.key"
+            echo -e "  Cert: $try_ssl_dir/fullchain.crt"
+            echo -e "${YELLOW}ACME output (last 30 lines):${NC}"
+            echo "$try_output" | tail -30
+            return 1
+        else
+            log_error "Failed to issue certificate on port $try_port (exit code: $try_exit_code)"
+            echo -e "${YELLOW}ACME output:${NC}"
+            echo "$try_output" | tail -30
+            return 1
+        fi
+    }
+    
+    # Try primary port
+    if _try_issue_cert "$acme_port" "$domain" "$ssl_dir" "$reload_cmd"; then
         set -e
         set -o pipefail
         return 0
-    else
-        log_error "Failed to issue certificate on port $acme_port (exit code: $acme_exit_code)"
-        echo -e "${YELLOW}ACME output:${NC}"
-        echo "$acme_output" | tail -30
-        echo
-        
-        # Try next available port if we haven't exhausted all options
-        if [ -z "$ACME_PORT" ]; then
-            local tried_port="$acme_port"
-            for fallback_port in "${ACME_FALLBACK_PORTS[@]}"; do
-                if [ "$fallback_port" = "$tried_port" ]; then
-                    continue
-                fi
-                if ! ss -tlnp 2>/dev/null | grep -q ":$fallback_port " 2>/dev/null; then
-                    echo
-                    log_warning "Trying fallback port $fallback_port..."
-                    
-                    local fallback_args=(
-                        --issue
-                        --standalone
-                        -d "$domain"
-                        --key-file "$ssl_dir/private.key"
-                        --fullchain-file "$ssl_dir/fullchain.crt"
-                        --alpn
-                        --tlsport "$fallback_port"
-                        --server letsencrypt
-                        --force
-                        --debug 2
-                    )
-                    
-                    if [ -n "$reload_cmd" ]; then
-                        fallback_args+=(--reloadcmd "$reload_cmd")
-                    fi
-                    
-                    acme_output=$("$ACME_HOME/acme.sh" "${fallback_args[@]}" 2>&1) || true
-                    acme_exit_code=$?
-                    
-                    if [ $acme_exit_code -eq 0 ]; then
-                        log_success "Certificate issued successfully on fallback port $fallback_port"
-                        chmod 600 "$ssl_dir/private.key" 2>/dev/null || true
-                        chmod 644 "$ssl_dir/fullchain.crt" 2>/dev/null || true
-                        set -e
-                        set -o pipefail
-                        return 0
-                    else
-                        echo -e "${YELLOW}Fallback attempt failed:${NC}"
-                        echo "$acme_output" | tail -15
-                    fi
-                fi
-            done
-        fi
-        
-        set -e
-        set -o pipefail
-        return 1
     fi
+    
+    # Try fallback ports if primary port wasn't explicitly set
+    if [ -z "$ACME_PORT" ]; then
+        local tried_port="$acme_port"
+        for fallback_port in "${ACME_FALLBACK_PORTS[@]}"; do
+            if [ "$fallback_port" = "$tried_port" ]; then
+                continue
+            fi
+            if ! ss -tlnp 2>/dev/null | grep -q ":$fallback_port " 2>/dev/null; then
+                echo
+                log_warning "Trying fallback port $fallback_port..."
+                
+                if _try_issue_cert "$fallback_port" "$domain" "$ssl_dir" "$reload_cmd"; then
+                    set -e
+                    set -o pipefail
+                    return 0
+                fi
+            fi
+        done
+    fi
+    
+    set -e
+    set -o pipefail
+    return 1
 }
 
 # Renew SSL certificates
@@ -927,13 +961,42 @@ renew_ssl_certificates() {
         return 1
     fi
     
+    # Collect all unique TLS ports from acme.sh domain configs for iptables redirect
+    local tls_ports=()
+    local acme_home="${ACME_HOME:-$HOME/.acme.sh}"
+    for domain_conf in "$acme_home"/*/[!.]*.conf; do
+        [ -f "$domain_conf" ] || continue
+        local saved_port
+        saved_port=$(grep "^Le_TLSPort=" "$domain_conf" 2>/dev/null | cut -d"'" -f2 | tr -d '"')
+        if [ -n "$saved_port" ] && [ "$saved_port" != "443" ]; then
+            # Add to array if not already present
+            local already=false
+            for p in "${tls_ports[@]}"; do
+                [ "$p" = "$saved_port" ] && { already=true; break; }
+            done
+            [ "$already" = false ] && tls_ports+=("$saved_port")
+        fi
+    done
+    
+    # Setup iptables redirects for all non-443 TLS ports
+    for port in "${tls_ports[@]}"; do
+        setup_acme_port_redirect "$port"
+    done
+    
+    local renew_result=0
     if "$ACME_HOME/acme.sh" --cron --home "$ACME_HOME" 2>&1; then
         log_success "Certificate renewal check completed"
-        return 0
     else
         log_warning "Certificate renewal encountered issues"
-        return 1
+        renew_result=1
     fi
+    
+    # Cleanup iptables redirects
+    for port in "${tls_ports[@]}"; do
+        cleanup_acme_port_redirect "$port"
+    done
+    
+    return $renew_result
 }
 
 # Setup auto-renewal cron job
@@ -945,16 +1008,64 @@ setup_ssl_auto_renewal() {
         return 1
     fi
     
-    # acme.sh automatically sets up cron job during installation
-    # Just verify it exists
-    if crontab -l 2>/dev/null | grep -q "acme.sh"; then
-        log_success "Auto-renewal cron job is already configured"
-    else
-        # Manual cron setup if needed
-        log_info "Configuring cron job for auto-renewal..."
-        (crontab -l 2>/dev/null; echo "0 0 * * * \"$ACME_HOME/acme.sh\" --cron --home \"$ACME_HOME\" > /dev/null 2>&1") | crontab -
-        log_success "Auto-renewal cron job configured"
+    # Create renewal wrapper script that handles iptables redirect for non-443 TLS ports
+    local wrapper_script="$APP_DIR/acme-renew.sh"
+    cat > "$wrapper_script" <<'WRAPPER_EOF'
+#!/usr/bin/env bash
+# Auto-generated wrapper for acme.sh renewal with iptables redirect support
+# TLS-ALPN-01 requires Let's Encrypt to connect to port 443.
+# When acme.sh uses --tlsport (non-443), iptables REDIRECT is needed.
+
+set -e
+
+ACME_HOME="__ACME_HOME__"
+
+# Collect all TLS ports from domain configs
+tls_ports=()
+for domain_conf in "$ACME_HOME"/*/[!.]*.conf; do
+    [ -f "$domain_conf" ] || continue
+    saved_port=$(grep "^Le_TLSPort=" "$domain_conf" 2>/dev/null | cut -d"'" -f2 | tr -d '"')
+    if [ -n "$saved_port" ] && [ "$saved_port" != "443" ]; then
+        already=false
+        for p in "${tls_ports[@]}"; do
+            [ "$p" = "$saved_port" ] && { already=true; break; }
+        done
+        [ "$already" = false ] && tls_ports+=("$saved_port")
     fi
+done
+
+# Setup iptables redirects
+for port in "${tls_ports[@]}"; do
+    iptables -t nat -I PREROUTING 1 -p tcp --dport 443 -j REDIRECT --to-port "$port" 2>/dev/null || true
+    iptables -t nat -I OUTPUT 1 -p tcp --dport 443 -o lo -j REDIRECT --to-port "$port" 2>/dev/null || true
+done
+
+# Run acme.sh cron
+"$ACME_HOME/acme.sh" --cron --home "$ACME_HOME" > /dev/null 2>&1
+renew_exit=$?
+
+# Cleanup iptables redirects
+for port in "${tls_ports[@]}"; do
+    iptables -t nat -D PREROUTING -p tcp --dport 443 -j REDIRECT --to-port "$port" 2>/dev/null || true
+    iptables -t nat -D OUTPUT -p tcp --dport 443 -o lo -j REDIRECT --to-port "$port" 2>/dev/null || true
+done
+
+exit $renew_exit
+WRAPPER_EOF
+    
+    # Replace placeholder with actual ACME_HOME path
+    sed -i "s|__ACME_HOME__|$ACME_HOME|g" "$wrapper_script"
+    chmod 700 "$wrapper_script"
+    
+    # Remove any existing acme.sh cron entries (both direct and wrapper)
+    if crontab -l 2>/dev/null | grep -q "acme"; then
+        crontab -l 2>/dev/null | grep -v "acme" | crontab - 2>/dev/null || true
+    fi
+    
+    # Setup cron with wrapper script
+    log_info "Configuring cron job for auto-renewal..."
+    (crontab -l 2>/dev/null; echo "0 0 * * * $wrapper_script") | crontab -
+    log_success "Auto-renewal cron job configured (with iptables redirect support)"
     
     return 0
 }
@@ -1229,7 +1340,6 @@ init_web_server_config() {
             VOLUME_PREFIX="nginx"
             APP_DIR="/opt/nginx-selfsteal"
             HTML_DIR="/opt/nginx-selfsteal/html"
-            LOGS_DIR="/var/log/nginx"
             WEB_SERVER_CONFIG_FILE="nginx.conf"
             ;;
         caddy|*)
@@ -1237,7 +1347,6 @@ init_web_server_config() {
             VOLUME_PREFIX="caddy"
             APP_DIR="/opt/caddy"
             HTML_DIR="/opt/caddy/html"
-            LOGS_DIR="/var/log/caddy"
             WEB_SERVER_CONFIG_FILE="Caddyfile"
             ;;
     esac
@@ -1706,7 +1815,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ${HTML_DIR}:/var/www/html
-      - ${LOGS_DIR}:/var/log/caddy
+      - ./logs:/var/log/caddy
       - ./ssl:/etc/caddy/ssl:ro
       - ${VOLUME_PREFIX}_data:/data
       - ${VOLUME_PREFIX}_config:/config
@@ -1734,7 +1843,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ${HTML_DIR}:/var/www/html
-      - ${LOGS_DIR}:/var/log/caddy
+      - ./logs:/var/log/caddy
       - ${VOLUME_PREFIX}_data:/data
       - ${VOLUME_PREFIX}_config:/config
     env_file:
@@ -2099,7 +2208,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./conf.d:/etc/nginx/conf.d:ro
       - ${HTML_DIR}:/var/www/html:ro
-      - ${LOGS_DIR}:/var/log/nginx
+      - ./logs:/var/log/nginx
       - ./ssl:/etc/nginx/ssl:ro
       - /dev/shm:/dev/shm
     env_file:
@@ -2123,7 +2232,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./conf.d:/etc/nginx/conf.d:ro
       - ${HTML_DIR}:/var/www/html:ro
-      - ${LOGS_DIR}:/var/log/nginx
+      - ./logs:/var/log/nginx
       - ./ssl:/etc/nginx/ssl:ro
     env_file:
       - .env
@@ -2686,7 +2795,7 @@ install_command() {
     
     create_dir_safe "$APP_DIR" || return 1
     create_dir_safe "$HTML_DIR" || return 1
-    create_dir_safe "$LOGS_DIR" || return 1
+    create_dir_safe "$APP_DIR/logs" || return 1
     
     log_success "Directories created"
 
@@ -3828,7 +3937,7 @@ renew_ssl_command() {
                 log_info "Stopping Nginx for certificate issuance..."
                 cd "$APP_DIR" && docker compose stop
                 
-                if issue_ssl_certificate "$domain" "$APP_DIR/ssl" "$HTML_DIR"; then
+                if issue_ssl_certificate "$domain" "$APP_DIR/ssl" "false"; then
                     log_success "Certificate obtained successfully"
                     setup_ssl_auto_renewal
                     
@@ -3911,6 +4020,14 @@ renew_ssl_command() {
             
             cd "$APP_DIR" && docker compose stop
             
+            # Get the saved TLS port from acme.sh domain config for iptables redirect
+            local acme_tls_port
+            acme_tls_port=$(get_acme_tls_port "$domain")
+            
+            # Setup iptables redirect before renewal
+            setup_acme_port_redirect "$acme_tls_port"
+            
+            local renew_ok=false
             if "$ACME_HOME/acme.sh" --renew -d "$domain" --force 2>&1; then
                 # Re-install certificate
                 "$ACME_HOME/acme.sh" --install-cert -d "$domain" \
@@ -3919,9 +4036,13 @@ renew_ssl_command() {
                     --reloadcmd "docker exec $CONTAINER_NAME nginx -s reload 2>/dev/null || true" 2>&1
                 
                 log_success "Certificate renewed successfully"
+                renew_ok=true
             else
                 log_warning "Renewal encountered issues (may not be due for renewal yet)"
             fi
+            
+            # Cleanup iptables redirect
+            cleanup_acme_port_redirect "$acme_tls_port"
             
             log_info "Starting Nginx..."
             cd "$APP_DIR" && docker compose up -d
@@ -3964,7 +4085,7 @@ clean_logs_command() {
     echo -e "${GRAY}   Docker logs: ${WHITE}${docker_logs_size}KB${NC}"
     
     # Server access logs
-    local server_logs_path="$LOGS_DIR"
+    local server_logs_path="$APP_DIR/logs"
     if [ -d "$server_logs_path" ]; then
         local server_logs_size
         server_logs_size=$(du -sk "$server_logs_path" 2>/dev/null | cut -f1 || echo "0")
@@ -4032,14 +4153,14 @@ logs_size_command() {
     fi
     
     # Logs directory
-    if [ -d "$LOGS_DIR" ]; then
+    if [ -d "$APP_DIR/logs" ]; then
         local logs_dir_size
-        logs_dir_size=$(du -sk "$LOGS_DIR" 2>/dev/null | cut -f1 || echo "0")
+        logs_dir_size=$(du -sk "$APP_DIR/logs" 2>/dev/null | cut -f1 || echo "0")
         echo -e "${WHITE}📁 Logs directory:${NC} ${GRAY}${logs_dir_size}KB${NC}"
         
         # List individual log files
         local log_files
-        log_files=$(find "$LOGS_DIR" -name "*.log*" -type f 2>/dev/null)
+        log_files=$(find "$APP_DIR/logs" -name "*.log*" -type f 2>/dev/null)
         if [ -n "$log_files" ]; then
             echo -e "${GRAY}   Log files:${NC}"
             while IFS= read -r log_file; do
