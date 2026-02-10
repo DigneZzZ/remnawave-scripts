@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.1.0
+# Version: 4.1.1
 set -e
-SCRIPT_VERSION="4.1.0"
+SCRIPT_VERSION="4.1.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -618,11 +618,8 @@ EOL
                 read -p "Do you want to restart RemnaNode to apply changes? (y/n): " -r restart_now
                 if [[ $restart_now =~ ^[Yy]$ ]]; then
                     colorized_echo blue "Restarting RemnaNode"
-                    if $APP_NAME restart -n; then
-                        colorized_echo green "RemnaNode restarted successfully"
-                    else
-                        colorized_echo red "Failed to restart RemnaNode"
-                    fi
+                    restart_command -n
+                    colorized_echo green "RemnaNode restarted successfully"
                 else
                     colorized_echo yellow "Remember to restart RemnaNode to apply changes"
                 fi
