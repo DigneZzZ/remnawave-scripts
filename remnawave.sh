@@ -10016,8 +10016,8 @@ install_command() {
             
             # Try to read old credentials from file
             if [ -f "$old_creds_file" ]; then
-                old_username=$(grep "Username:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Username:[[:space:]]*//')
-                old_password=$(grep "Password:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Password:[[:space:]]*//')
+                old_username=$(grep "Username:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Username:[[:space:]]*//;s/[[:space:]]*$//')
+                old_password=$(grep "Password:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Password:[[:space:]]*//;s/[[:space:]]*$//')
             fi
             
             # Try to login with old credentials
