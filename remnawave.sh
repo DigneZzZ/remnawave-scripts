@@ -9986,17 +9986,180 @@ install_command() {
     colorized_echo cyan "==================================================="
     
     if [ "$is_override" = true ]; then
-        # Override installation - admin already exists
+        # Override installation - try to recover old credentials or create new ones
         colorized_echo yellow "This is an override installation."
-        colorized_echo yellow "Admin account already exists - cannot create automatically."
         echo
-        colorized_echo blue "To configure subscription-page API token:"
-        echo -e "   \033[38;5;244m1. Login to Remnawave Panel\033[0m"
-        echo -e "   \033[38;5;244m2. Go to Settings → API Tokens\033[0m"
-        echo -e "   \033[38;5;244m3. Create token named 'subscription-page'\033[0m"
-        echo -e "   \033[38;5;244m4. Run: $APP_NAME subpage\033[0m"
-        echo
-        colorized_echo yellow "Configure API token later: $APP_NAME subpage"
+        
+        # Wait for panel to be fully ready
+        if wait_for_api_ready 30; then
+            echo
+            colorized_echo green "Panel is ready!"
+            
+            # Additional wait for database migrations to complete
+            colorized_echo blue "Waiting for database migrations..."
+            sleep 10
+            echo
+            
+            local old_creds_file="$APP_DIR/admin-credentials.txt"
+            local old_username=""
+            local old_password=""
+            local login_ok=false
+            
+            # Try to read old credentials from file
+            if [ -f "$old_creds_file" ]; then
+                old_username=$(grep "Username:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Username:[[:space:]]*//;s/[[:space:]]*$//')
+                old_password=$(grep "Password:" "$old_creds_file" 2>/dev/null | head -1 | sed 's/.*Password:[[:space:]]*//;s/[[:space:]]*$//')
+            fi
+            
+            # Try to login with old credentials
+            if [ -n "$old_username" ] && [ -n "$old_password" ]; then
+                colorized_echo blue "Found previous credentials, verifying..."
+                local panel_port=$(get_panel_port)
+                local auth_data='{"username":"'"$old_username"'","password":"'"$old_password"'"}'
+                local login_response=$(make_api_request "POST" "http://127.0.0.1:$panel_port/api/auth/login" "" "$auth_data")
+                local old_token=""
+                if command -v jq >/dev/null 2>&1; then
+                    old_token=$(echo "$login_response" | jq -r '.response.accessToken // .accessToken // ""' 2>/dev/null)
+                fi
+                if [ -z "$old_token" ] || [ "$old_token" = "null" ]; then
+                    old_token=$(echo "$login_response" | grep -o '"accessToken":"[^"]*"' | head -1 | sed 's/"accessToken":"//;s/"$//')
+                fi
+                
+                if [ -n "$old_token" ] && [ "$old_token" != "null" ]; then
+                    login_ok=true
+                    admin_username="$old_username"
+                    admin_password="$old_password"
+                    colorized_echo green "✅ Previous credentials are still valid!"
+                    
+                    # Configure subscription-page API token
+                    colorized_echo blue "Creating API token for subscription-page..."
+                    local api_token=$(create_subscription_api_token "$old_token" "subscription-page")
+                    
+                    if [ -n "$api_token" ]; then
+                        if grep -q "^#*REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null; then
+                            sed -i "s|^#*REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_token|" "$SUB_ENV_FILE"
+                        else
+                            echo "REMNAWAVE_API_TOKEN=$api_token" >> "$SUB_ENV_FILE"
+                        fi
+                        
+                        colorized_echo green "✅ API token created and saved!"
+                        
+                        colorized_echo blue "Starting subscription-page with API token..."
+                        if $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page; then
+                            colorized_echo green "✅ Subscription-page started with API token!"
+                        else
+                            colorized_echo yellow "⚠️  Subscription-page start had issues. Check with: $APP_NAME status"
+                        fi
+                    else
+                        colorized_echo yellow "⚠️  Could not create API token automatically."
+                        colorized_echo yellow "You can configure it later: $APP_NAME subpage"
+                    fi
+                    
+                    # Display credentials summary
+                    echo
+                    colorized_echo cyan "==================================================="
+                    colorized_echo cyan "🔐 YOUR ADMIN CREDENTIALS"
+                    colorized_echo cyan "==================================================="
+                    echo -e "\033[1;37m   Username:\033[0m \033[1;32m$admin_username\033[0m"
+                    echo -e "\033[1;37m   Password:\033[0m \033[1;32m$admin_password\033[0m"
+                    colorized_echo cyan "==================================================="
+                    colorized_echo yellow "⚠️  Save these credentials! They are also stored in:"
+                    colorized_echo yellow "   $old_creds_file"
+                    colorized_echo cyan "==================================================="
+                fi
+            fi
+            
+            # If old credentials didn't work, generate new ones
+            if [ "$login_ok" = false ]; then
+                colorized_echo yellow "Previous credentials not found or invalid. Creating new admin account..."
+                echo
+                
+                # Generate new admin credentials
+                admin_username=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+                admin_password=$(tr -dc 'a-zA-Z0-9_-' < /dev/urandom | head -c 24)
+                
+                colorized_echo blue "Generated admin credentials:"
+                echo -e "   \033[1;37mUsername:\033[0m \033[1;32m$admin_username\033[0m"
+                echo -e "   \033[1;37mPassword:\033[0m \033[1;32m$admin_password\033[0m"
+                echo
+                colorized_echo blue "Creating admin account and API token..."
+                
+                local admin_token=$(get_admin_token "$admin_username" "$admin_password")
+                
+                # Save credentials to file
+                local credentials_file="$APP_DIR/admin-credentials.txt"
+                cat > "$credentials_file" << EOF
+========================================
+  REMNAWAVE ADMIN CREDENTIALS
+========================================
+  Created: $(date '+%Y-%m-%d %H:%M:%S')
+  
+  Username: $admin_username
+  Password: $admin_password
+  
+  ⚠️  IMPORTANT: Keep this file secure!
+  Delete after memorizing credentials.
+
+----------------------------------------
+  Developed by GIG.ovh project
+  More guides available at our forum:
+  https://gig.ovh
+----------------------------------------
+========================================
+EOF
+                chmod 600 "$credentials_file"
+                
+                if [ -n "$admin_token" ]; then
+                    colorized_echo green "✅ Admin account created successfully!"
+                    colorized_echo green "✅ Credentials saved to: $credentials_file"
+                    
+                    # Create subscription-page API token
+                    colorized_echo blue "Creating API token for subscription-page..."
+                    local api_token=$(create_subscription_api_token "$admin_token" "subscription-page")
+                    
+                    if [ -n "$api_token" ]; then
+                        if grep -q "^#*REMNAWAVE_API_TOKEN=" "$SUB_ENV_FILE" 2>/dev/null; then
+                            sed -i "s|^#*REMNAWAVE_API_TOKEN=.*|REMNAWAVE_API_TOKEN=$api_token|" "$SUB_ENV_FILE"
+                        else
+                            echo "REMNAWAVE_API_TOKEN=$api_token" >> "$SUB_ENV_FILE"
+                        fi
+                        
+                        colorized_echo green "✅ API token created and saved!"
+                        
+                        colorized_echo blue "Starting subscription-page with API token..."
+                        if $COMPOSE -f "$COMPOSE_FILE" up -d --force-recreate ${APP_NAME}-subscription-page; then
+                            colorized_echo green "✅ Subscription-page started with API token!"
+                        else
+                            colorized_echo yellow "⚠️  Subscription-page start had issues. Check with: $APP_NAME status"
+                        fi
+                    else
+                        colorized_echo yellow "⚠️  Could not create API token automatically."
+                        colorized_echo yellow "You can configure it later: $APP_NAME subpage"
+                    fi
+                    
+                    # Display credentials summary
+                    echo
+                    colorized_echo cyan "==================================================="
+                    colorized_echo cyan "🔐 YOUR ADMIN CREDENTIALS"
+                    colorized_echo cyan "==================================================="
+                    echo -e "\033[1;37m   Username:\033[0m \033[1;32m$admin_username\033[0m"
+                    echo -e "\033[1;37m   Password:\033[0m \033[1;32m$admin_password\033[0m"
+                    colorized_echo cyan "==================================================="
+                    colorized_echo yellow "⚠️  Save these credentials! They are also stored in:"
+                    colorized_echo yellow "   $credentials_file"
+                    colorized_echo cyan "==================================================="
+                else
+                    colorized_echo red "❌ Failed to create admin account!"
+                    colorized_echo yellow "You can register manually at: http://127.0.0.1:$APP_PORT"
+                    colorized_echo yellow "Then configure API token: $APP_NAME subpage"
+                fi
+            fi
+        else
+            colorized_echo yellow "Panel is not responding yet."
+            colorized_echo yellow "After panel starts, check your credentials in: $APP_DIR/admin-credentials.txt"
+            colorized_echo yellow "Or register admin at: http://127.0.0.1:$APP_PORT"
+            colorized_echo yellow "Then configure API token: $APP_NAME subpage"
+        fi
     else
         # Fresh installation - create admin and token
         colorized_echo yellow "Subscription-page v7.0.0+ requires REMNAWAVE_API_TOKEN"
