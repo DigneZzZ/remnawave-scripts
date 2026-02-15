@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.1.1
+# Version: 4.1.2
 set -e
-SCRIPT_VERSION="4.1.1"
+SCRIPT_VERSION="4.1.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1058,10 +1058,40 @@ uninstall_remnanode_data_files() {
     fi
 }
 
+# Pull docker images with retry logic to handle transient network failures
+# (IPv6 connection resets, ghcr.io timeouts, etc.)
+docker_pull_with_retry() {
+    local max_retries=3
+    local retry_delay=5
+    local attempt=1
+
+    while [ $attempt -le $max_retries ]; do
+        if $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" pull 2>&1; then
+            return 0
+        fi
+
+        if [ $attempt -lt $max_retries ]; then
+            colorized_echo yellow "⚠️  Image pull failed (attempt $attempt/$max_retries). Retrying in ${retry_delay}s..."
+            sleep $retry_delay
+            retry_delay=$((retry_delay * 2))
+        else
+            colorized_echo red "❌ Image pull failed after $max_retries attempts."
+            colorized_echo yellow "   This is usually caused by a transient network issue."
+            colorized_echo yellow "   You can try again later with: sudo $APP_NAME up"
+            return 1
+        fi
+
+        attempt=$((attempt + 1))
+    done
+}
+
 up_remnanode() {
     # Run migration for deprecated ports before starting (silent mode)
     migrate_deprecated_ports 2>/dev/null || true
-    
+
+    # Pull images with retry to handle transient network failures
+    docker_pull_with_retry
+
     $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" up -d --remove-orphans
 }
 
@@ -1098,7 +1128,7 @@ update_remnanode_script() {
 }
 
 update_remnanode() {
-    $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" pull
+    docker_pull_with_retry
 }
 
 is_remnanode_installed() {
