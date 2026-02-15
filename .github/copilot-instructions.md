@@ -57,6 +57,63 @@ docker-compose up -d  # WRONG
 - Use `${VAR:-default}` for safe defaults
 - Credential files: `chmod 600`
 
+### Git Workflow — MANDATORY
+
+The `main` branch is **protected** (branch protection rules, Code Scanning). **Never push directly to `main`.**
+
+#### Creating a PR for changes
+
+1. **Create a feature branch** from the current `main`:
+   ```bash
+   git checkout -b <type>/<short-description>
+   # Examples: fix/docker-pull-retry, feat/backup-encryption, docs/update-readme
+   ```
+
+2. **Commit changes** with a conventional commit message:
+   ```bash
+   git add <files>
+   git commit -m "<type>(<scope>): <summary>
+
+   - Detail 1
+   - Detail 2"
+   ```
+   Types: `fix`, `feat`, `docs`, `refactor`, `chore`
+   Scopes: `remnawave`, `remnanode`, `selfsteal`, `backup`, `wtm`, `netbird`
+
+3. **Push the branch** to remote:
+   ```bash
+   git push origin <branch-name>
+   ```
+
+4. **Create a Pull Request** using `gh` CLI:
+   ```bash
+   gh pr create --base main --head <branch-name> \
+     --title "<type>(<scope>): <summary>" \
+     --body-file /tmp/pr-body.md
+   ```
+   If `gh` is not installed: `brew install gh && gh auth login --web`
+
+5. **PR body template** — save to a temp file, then pass via `--body-file`:
+   ```markdown
+   ## Problem
+   Brief description of the issue.
+
+   ## Solution
+   What was changed and why.
+
+   ## Changes
+   - file1: description
+   - file2: description
+   ```
+
+#### Branch naming convention
+| Type | Example |
+|------|---------|
+| Bug fix | `fix/docker-pull-retry` |
+| Feature | `feat/telegram-threads` |
+| Documentation | `docs/update-readme` |
+| Refactor | `refactor/env-generation` |
+
 ### README Sync — MANDATORY
 When modifying or improving any script, **always update its corresponding README** file if it exists.
 
