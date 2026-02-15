@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.1.2
+# Version: 4.1.3
 set -e
-SCRIPT_VERSION="4.1.2"
+SCRIPT_VERSION="4.1.3"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1058,25 +1058,66 @@ uninstall_remnanode_data_files() {
     fi
 }
 
+# Force IPv4 for outbound connections by configuring /etc/gai.conf
+# This fixes Docker pull failures on servers with broken IPv6 connectivity
+enable_ipv4_preference() {
+    local gai_conf="/etc/gai.conf"
+    local ipv4_rule="precedence ::ffff:0:0/96  100"
+
+    # Already configured
+    if grep -q "^precedence ::ffff:0:0/96" "$gai_conf" 2>/dev/null; then
+        return 0
+    fi
+
+    colorized_echo yellow "🔧 Enabling IPv4 preference for network connections..."
+
+    if [ -f "$gai_conf" ]; then
+        # Uncomment existing rule if present
+        if grep -q "^#precedence ::ffff:0:0/96" "$gai_conf"; then
+            sed -i 's/^#precedence ::ffff:0:0\/96.*/precedence ::ffff:0:0\/96  100/' "$gai_conf"
+            colorized_echo green "✅ IPv4 preference enabled (uncommented existing rule in $gai_conf)"
+            return 0
+        fi
+    fi
+
+    # Append rule
+    echo "$ipv4_rule" >> "$gai_conf"
+    colorized_echo green "✅ IPv4 preference enabled (added rule to $gai_conf)"
+}
+
 # Pull docker images with retry logic to handle transient network failures
 # (IPv6 connection resets, ghcr.io timeouts, etc.)
+# On IPv6 failures, automatically switches to IPv4 preference before retrying
 docker_pull_with_retry() {
     local max_retries=3
     local retry_delay=5
     local attempt=1
+    local pull_output=""
+    local ipv4_forced=false
 
     while [ $attempt -le $max_retries ]; do
-        if $COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" pull 2>&1; then
+        pull_output=$($COMPOSE -f $COMPOSE_FILE -p "$APP_NAME" pull 2>&1) && {
+            echo "$pull_output"
             return 0
-        fi
+        }
 
-        if [ $attempt -lt $max_retries ]; then
+        echo "$pull_output"
+
+        # Detect IPv6 connection failures and switch to IPv4
+        if [ "$ipv4_forced" = false ] && echo "$pull_output" | grep -qE '\[([0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}\]'; then
+            colorized_echo yellow "⚠️  IPv6 connection failure detected (attempt $attempt/$max_retries)"
+            enable_ipv4_preference
+            ipv4_forced=true
+            colorized_echo blue "🔄 Retrying with IPv4 in ${retry_delay}s..."
+            sleep $retry_delay
+            retry_delay=$((retry_delay * 2))
+        elif [ $attempt -lt $max_retries ]; then
             colorized_echo yellow "⚠️  Image pull failed (attempt $attempt/$max_retries). Retrying in ${retry_delay}s..."
             sleep $retry_delay
             retry_delay=$((retry_delay * 2))
         else
             colorized_echo red "❌ Image pull failed after $max_retries attempts."
-            colorized_echo yellow "   This is usually caused by a transient network issue."
+            colorized_echo yellow "   This is usually caused by a network issue."
             colorized_echo yellow "   You can try again later with: sudo $APP_NAME up"
             return 1
         fi
