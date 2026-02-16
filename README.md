@@ -141,7 +141,7 @@ On `remnawave update`, deprecated env vars (OAuth, Branding) are auto-removed fr
 </details>
 
 <details>
-<summary><b>�� File Structure</b></summary>
+<summary><b>📂 File Structure</b></summary>
 
 ```text
 /opt/remnawave/
