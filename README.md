@@ -98,32 +98,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 - **Auto-generation** of `.env`, secrets, ports, `docker-compose.yml`
 - **Admin auto-creation** — credentials saved to `admin-credentials.txt`
 - **Caddy Reverse Proxy** — Simple mode (auto SSL) or Secure mode (auth portal + MFA)
-- **Backup system** — full/DB-only backups, cron scheduling, Telegram delivery, version-aware restore
+- **Backup system** — full/DB-only backups, cron scheduling, Telegram delivery, version-aware restore → see [💾 Backup, Restore & Migration](#-backup-restore--migration)
 - **Variable migration** — deprecated env vars auto-removed on `update` (v2.2.0+)
-
-<details>
-<summary><b>💾 Backup & Restore</b></summary>
-
-```bash
-remnawave backup                    # Full backup (compressed)
-remnawave backup --data-only        # Database only
-remnawave schedule                  # Configure cron schedule
-remnawave restore --file backup.tar.gz  # Restore with safety backup
-remnawave restore --database-only --file db.sql.gz
-```
-
-**Version checking:** major/minor must match; patch differences show warnings.
-
-**Manual restore (if needed):**
-```bash
-sudo bash remnawave.sh @ install --name remnawave
-sudo remnawave down
-tar -xzf backup.tar.gz
-cat backup_folder/database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
-sudo remnawave up
-```
-
-</details>
 
 <details>
 <summary><b>🌐 Standalone Subscription-Page</b></summary>
@@ -181,6 +157,69 @@ On `remnawave update`, deprecated env vars (OAuth, Branding) are auto-removed fr
 └── data/                 # SSL certs
 
 /usr/local/bin/remnawave  # CLI command
+```
+
+</details>
+
+---
+
+## 💾 Backup, Restore & Migration
+
+Built-in backup system in `remnawave.sh` with version-aware restore, cron scheduling, and Telegram delivery.
+
+### Backup
+
+```bash
+remnawave backup                    # Full system backup (compressed .tar.gz)
+remnawave backup --data-only        # Database only (.sql.gz)
+remnawave backup --no-compress      # Uncompressed backup
+```
+
+### Scheduled Backups
+
+```bash
+remnawave schedule                  # Interactive cron schedule setup
+```
+
+Options: daily/weekly/monthly intervals, retention policies, compression settings, Telegram delivery.
+
+### Restore
+
+```bash
+remnawave restore --file backup.tar.gz                  # Full restore (auto safety backup)
+remnawave restore --database-only --file database.sql.gz # Database only
+```
+
+**Version checking:** major/minor versions must match for restore; patch differences show warnings but are allowed.
+
+### Migration to Another Server
+
+1. Create a backup on the **source** server:
+   ```bash
+   remnawave backup
+   ```
+2. Transfer the backup file to the **target** server (e.g., via `scp`)
+3. On the **target** server, install and restore:
+   ```bash
+   bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name remnawave
+   remnawave restore --file backup.tar.gz
+   ```
+
+<details>
+<summary><b>🛠 Manual Restore (if automatic fails)</b></summary>
+
+```bash
+# Option A: New installation
+sudo bash remnawave.sh @ install --name remnawave
+sudo remnawave down
+tar -xzf backup.tar.gz
+cat backup_folder/database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
+sudo remnawave up
+
+# Option B: Existing installation
+sudo remnawave down
+cat database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
+sudo remnawave up
 ```
 
 </details>
