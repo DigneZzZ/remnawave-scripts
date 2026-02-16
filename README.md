@@ -37,6 +37,8 @@ After installation, manage services with: `remnawave`, `remnanode`, or `selfstea
 | **remnawave.sh** | Panel installer & manager | `remnawave <command>` |
 | **remnanode.sh** | Node installer & manager | `remnanode <command>` |
 | **selfsteal.sh** | Reality traffic masking | `selfsteal <command>` |
+| **wtm.sh** | WARP & Tor Manager | `wtm <command>` |
+| **netbird.sh** | NetBird VPN installer | `netbird.sh <command>` |
 
 **Key features across all scripts:** auto-updates, interactive menus, bilingual interface (EN/RU), Docker Compose v2, idempotent operations.
 
@@ -406,6 +408,50 @@ docker stats               # Resource usage
 Log rotation: 50MB max, 5 files kept, compressed automatically.
 
 </details>
+
+---
+
+## 🧩 Other Scripts
+
+This repository also includes additional utility scripts for network management and VPN setup.
+
+### 🌐 WTM — WARP & Tor Manager
+
+Professional tool for managing **Cloudflare WARP** and **Tor** on Linux servers. Includes XRay integration, interactive menus, and auto-updates.
+
+```bash
+# Install as global command
+sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
+
+# Or run directly
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh)
+
+# Install both WARP and Tor
+sudo wtm install-all
+```
+
+Key features: WARP (WireGuard), Tor SOCKS5 proxy, XRay routing for `.onion` domains, connection testing, service monitoring.
+
+📖 Full documentation: [README-warp.md](./README-warp.md)
+
+### 🐦 NetBird — VPN Installer
+
+Quick installer for [NetBird](https://netbird.io/) mesh VPN. Supports CLI, cloud-init, interactive menu, and Ansible modes.
+
+```bash
+# CLI installation
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key YOUR-SETUP-KEY
+
+# Auto-install for cloud-init / provisioning
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
+
+# Interactive menu
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) menu
+```
+
+Key features: one-liner install, SSH access between peers (`--ssh`), auto-firewall setup (UFW/firewalld), Ansible-friendly mode.
+
+📖 Full documentation: [README-netbird.md](./README-netbird.md)
 
 ---
 
