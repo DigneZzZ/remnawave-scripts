@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.5
+# VERSION=5.8.6
 
-SCRIPT_VERSION="5.8.5"
+SCRIPT_VERSION="5.8.6"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9041,6 +9041,9 @@ install_remnawave() {
     METRICS_USER=$(generate_random_string 12)
     METRICS_PASS=$(generate_random_string 32)
 
+    # Generate random webhook secret (exactly 64 chars, a-zA-Z0-9)
+    WEBHOOK_SECRET_HEADER=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 64)
+
     # Check for occupied ports
     get_occupied_ports
 
@@ -9306,7 +9309,8 @@ WEBHOOK_ENABLED=false
 ### Only https:// is allowed
 WEBHOOK_URL=https://webhook.site/1234567890
 ### This secret is used to sign the webhook payload, must be exact 64 characters. Only a-z, 0-9, A-Z are allowed.
-WEBHOOK_SECRET_HEADER=vsmu67Kmg6R8FjIOF1WUY8LWBHie4scdEqrfsKmyf4IAf8dY3nFS0wwYHkhh6ZvQ
+### Generated automatically during installation on $(date '+%Y-%m-%d %H:%M:%S')
+WEBHOOK_SECRET_HEADER=$WEBHOOK_SECRET_HEADER
 
 
 ### Bandwidth usage reached notifications
