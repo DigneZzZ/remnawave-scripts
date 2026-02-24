@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.2.0
+# Version: 4.2.1
 set -e
-SCRIPT_VERSION="4.2.0"
+SCRIPT_VERSION="4.2.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -2175,12 +2175,24 @@ regenerate_compose_file() {
         current_container="$APP_NAME"
     fi
     
-    # Extract existing active volumes (skip commented lines)
+    # Extract existing volumes section (both active and commented)
     local volumes=()
+    local commented_volumes=()
+    local has_volumes_section=false
+    local volumes_section_commented=false
     local in_volumes=false
     while IFS= read -r line; do
+        # Uncommented volumes: key
         if [[ "$line" =~ ^[[:space:]]+volumes:[[:space:]]*$ ]]; then
             in_volumes=true
+            has_volumes_section=true
+            continue
+        fi
+        # Commented volumes: key (e.g. "    # volumes:")
+        if [[ "$line" =~ ^[[:space:]]+#[[:space:]]*volumes:[[:space:]]*$ ]]; then
+            in_volumes=true
+            has_volumes_section=true
+            volumes_section_commented=true
             continue
         fi
         if [ "$in_volumes" = true ]; then
@@ -2188,8 +2200,12 @@ regenerate_compose_file() {
             if [[ "$line" =~ ^[[:space:]]+-[[:space:]] ]] && [[ ! "$line" =~ ^[[:space:]]*# ]]; then
                 local vol_entry=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
                 volumes+=("$vol_entry")
-            # Skip comments
-            elif [[ "$line" =~ ^[[:space:]]*# ]]; then
+            # Commented volume entry (e.g. "    #   - /path:/path" or "      # - /path:/path")
+            elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]*-[[:space:]] ]]; then
+                local vol_entry=$(echo "$line" | sed 's/^[[:space:]]*#[[:space:]]*-[[:space:]]*//')
+                commented_volumes+=("$vol_entry")
+            # Empty line inside volumes section — skip
+            elif [[ "$line" =~ ^[[:space:]]*$ ]]; then
                 continue
             # Any other property means end of volumes
             else
@@ -2222,12 +2238,32 @@ services:
         hard: 1048576
 EOL
     
-    # Re-add volumes if any existed
+    # Re-add volumes section
     if [ ${#volumes[@]} -gt 0 ]; then
+        # Has active volumes — write them, plus any commented ones
         echo "    volumes:" >> "$compose_file"
         for vol in "${volumes[@]}"; do
             echo "      - $vol" >> "$compose_file"
         done
+        for vol in "${commented_volumes[@]}"; do
+            echo "      # - $vol" >> "$compose_file"
+        done
+    elif [ ${#commented_volumes[@]} -gt 0 ]; then
+        # Only commented volumes — preserve them
+        echo "    # volumes:" >> "$compose_file"
+        for vol in "${commented_volumes[@]}"; do
+            echo "    #   - $vol" >> "$compose_file"
+        done
+    elif [ "$has_volumes_section" = false ]; then
+        # No volumes section at all — add default commented template
+        cat >> "$compose_file" <<EOL
+    # volumes:
+    #   - $XRAY_FILE:/usr/local/bin/xray
+    #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
+    #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
+    #   - $DATA_DIR:$DATA_DIR
+    #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
+EOL
     fi
     
     # Validate the regenerated file
