@@ -276,6 +276,7 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 ### Основные возможности
 
 - **Xray-core** — автоопределение, интерактивный выбор версии, поддержка pre-release
+- **NET_ADMIN capability** (v4.2.0+) — автоматически добавляется для функций IP Management (просмотр/сброс пользовательских соединений). Автомиграция при `update`
 - **Ротация логов** — макс. 50MB, 5 файлов, сжатие, без простоя
 - **Миграция конфигурации** (v2.2.2+) — `APP_PORT` → `NODE_PORT`, `SSL_CERT` → `SECRET_KEY` (автоматически при `update`)
 - **Два формата конфигурации** — поддержка `.env` и inline-переменных в docker-compose

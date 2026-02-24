@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.1.3
+# Version: 4.2.0
 set -e
-SCRIPT_VERSION="4.1.3"
+SCRIPT_VERSION="4.2.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -984,6 +984,8 @@ services:
       - .env
     network_mode: host
     restart: always
+    cap_add:
+      - NET_ADMIN
     ulimits:
       nofile:
         soft: 1048576
@@ -1129,6 +1131,9 @@ docker_pull_with_retry() {
 up_remnanode() {
     # Run migration for deprecated ports before starting (silent mode)
     migrate_deprecated_ports 2>/dev/null || true
+
+    # Run migration for cap_add NET_ADMIN (silent mode)
+    migrate_cap_add 2>/dev/null || true
 
     # Pull images with retry to handle transient network failures
     docker_pull_with_retry
@@ -1957,6 +1962,292 @@ migrate_deprecated_ports() {
     return 0
 }
 
+# ============================================
+# Migration: Add cap_add NET_ADMIN (v4.2.0)
+# Since remnawave/node v2.6.0, NET_ADMIN capability is needed
+# for IP Management features (view/drop user connections)
+# ============================================
+migrate_cap_add() {
+    local compose_file="$COMPOSE_FILE"
+    
+    if [ ! -f "$compose_file" ]; then
+        return 0
+    fi
+    
+    # Check if cap_add with NET_ADMIN already exists (uncommented)
+    if grep -qE "^[[:space:]]+cap_add:" "$compose_file" && \
+       grep -qE "^[[:space:]]+-[[:space:]]*NET_ADMIN" "$compose_file"; then
+        return 0
+    fi
+    
+    echo
+    colorized_echo cyan "🔄 Migration: Adding NET_ADMIN capability (remnawave/node v2.6.0+)"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    
+    colorized_echo blue "   NET_ADMIN capability enables IP Management features:"
+    colorized_echo blue "   • View user connections from any node"
+    colorized_echo blue "   • Drop user connections remotely"
+    echo
+    
+    # Create backup before modifying
+    local backup_file="${compose_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$compose_file" "$backup_file"
+    
+    # Determine indentation from docker-compose.yml
+    local service_indent=$(get_service_property_indentation "$compose_file")
+    local indent_type=""
+    if [[ "$service_indent" =~ $'\t' ]]; then
+        indent_type=$'\t'
+    else
+        indent_type="  "
+    fi
+    local item_indent="${service_indent}${indent_type}"
+    
+    local escaped_service_indent=$(escape_for_sed "$service_indent")
+    
+    # Add cap_add section before ulimits (or after restart: always as fallback)
+    local inserted=false
+    
+    if grep -q "^${escaped_service_indent}ulimits:" "$compose_file"; then
+        # Insert cap_add block before ulimits using temp file approach
+        local temp_file=$(mktemp)
+        local ulimits_found=false
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^${service_indent}ulimits: ]] && [ "$ulimits_found" = false ]; then
+                ulimits_found=true
+                echo "${service_indent}cap_add:" >> "$temp_file"
+                echo "${item_indent}- NET_ADMIN" >> "$temp_file"
+            fi
+            echo "$line" >> "$temp_file"
+        done < "$compose_file"
+        
+        mv "$temp_file" "$compose_file"
+        inserted=true
+    elif grep -q "^${escaped_service_indent}restart:" "$compose_file"; then
+        # Insert cap_add block after restart: always using temp file approach
+        local temp_file=$(mktemp)
+        
+        while IFS= read -r line; do
+            echo "$line" >> "$temp_file"
+            if [[ "$line" =~ ^${service_indent}restart: ]]; then
+                echo "${service_indent}cap_add:" >> "$temp_file"
+                echo "${item_indent}- NET_ADMIN" >> "$temp_file"
+            fi
+        done < "$compose_file"
+        
+        mv "$temp_file" "$compose_file"
+        inserted=true
+    fi
+    
+    if [ "$inserted" = false ]; then
+        colorized_echo yellow "⚠️  Could not find insertion point for cap_add"
+        rm -f "$backup_file"
+        return 1
+    fi
+    
+    # Validate the modified file
+    colorized_echo blue "   Validating docker-compose.yml..."
+    if validate_compose_file "$compose_file"; then
+        colorized_echo green "   ✅ cap_add: NET_ADMIN added successfully"
+        colorized_echo gray "   Backup saved: $backup_file"
+        cleanup_old_backups "$compose_file"
+    else
+        colorized_echo red "   ❌ Validation failed! Restoring backup..."
+        if restore_backup "$backup_file" "$compose_file"; then
+            colorized_echo green "   ✅ Backup restored"
+        else
+            colorized_echo red "   ❌ Failed to restore backup!"
+        fi
+        return 1
+    fi
+    
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    return 0
+}
+
+# ============================================
+# Audit: Check docker-compose.yml against current template (v4.2.0)
+# - No inline environment vars → offer to regenerate from template
+# - Has inline environment vars → only add missing cap_add silently
+# ============================================
+audit_compose_file() {
+    local compose_file="$COMPOSE_FILE"
+    
+    if [ ! -f "$compose_file" ]; then
+        return 0
+    fi
+    
+    # Detect if user has inline environment variables in docker-compose.yml
+    local has_inline_env=false
+    if grep -qE "^[[:space:]]+environment:" "$compose_file"; then
+        # Check that there are actual variable lines (not just the key)
+        if grep -A 20 "environment:" "$compose_file" | grep -qE "^[[:space:]]+-[[:space:]]*[A-Z_]+=|^[[:space:]]+[A-Z_]+="; then
+            has_inline_env=true
+        fi
+    fi
+    
+    # If user has inline environment: don't offer regeneration,
+    # just ensure cap_add is present (migrate_cap_add already handles this)
+    if [ "$has_inline_env" = true ]; then
+        return 0
+    fi
+    
+    # --- No inline env: check if file needs regeneration ---
+    local needs_regen=false
+    local issues=()
+    
+    # Check for deprecated 'version:' key
+    if grep -qE "^version:" "$compose_file"; then
+        needs_regen=true
+        issues+=("deprecated 'version:' key")
+    fi
+    
+    # Check for missing hostname
+    if ! grep -qE "^[[:space:]]+hostname:" "$compose_file"; then
+        needs_regen=true
+        issues+=("missing 'hostname:'")
+    fi
+    
+    # Check for missing cap_add: NET_ADMIN
+    if ! (grep -qE "^[[:space:]]+cap_add:" "$compose_file" && \
+          grep -qE "^[[:space:]]+-[[:space:]]*NET_ADMIN" "$compose_file"); then
+        needs_regen=true
+        issues+=("missing 'cap_add: NET_ADMIN'")
+    fi
+    
+    # Check for missing ulimits
+    if ! grep -qE "^[[:space:]]+ulimits:" "$compose_file"; then
+        needs_regen=true
+        issues+=("missing 'ulimits:'")
+    fi
+    
+    # Check for missing network_mode: host
+    if ! grep -qE "^[[:space:]]+network_mode:[[:space:]]*host" "$compose_file"; then
+        needs_regen=true
+        issues+=("missing 'network_mode: host'")
+    fi
+    
+    if [ "$needs_regen" = false ]; then
+        return 0
+    fi
+    
+    echo
+    colorized_echo cyan "🔍 Docker Compose Audit"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    
+    colorized_echo yellow "   ⚠️  Outdated docker-compose.yml detected:"
+    for issue in "${issues[@]}"; do
+        colorized_echo yellow "      • $issue"
+    done
+    echo
+    
+    colorized_echo blue "   Your docker-compose.yml can be regenerated from the current template."
+    colorized_echo gray "   All settings (image, volumes, env_file) will be preserved."
+    echo
+    read -p "   Regenerate docker-compose.yml? [y/N]: " -r regen_choice
+    
+    if [[ $regen_choice =~ ^[Yy]$ ]]; then
+        regenerate_compose_file
+    else
+        colorized_echo gray "   Skipped. You can manually edit: $APP_NAME edit"
+    fi
+    
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    return 0
+}
+
+# Regenerate docker-compose.yml preserving user settings (image, volumes, container name)
+regenerate_compose_file() {
+    local compose_file="$COMPOSE_FILE"
+    
+    colorized_echo blue "   📝 Regenerating docker-compose.yml..."
+    
+    # Extract current image
+    local current_image=$(grep -E "image:.*remnawave/node" "$compose_file" 2>/dev/null | awk '{print $NF}' | tr -d '"' | tr -d "'" | head -1)
+    if [ -z "$current_image" ]; then
+        current_image="ghcr.io/remnawave/node:latest"
+    fi
+    
+    # Extract current container name
+    local current_container=$(grep -E "container_name:" "$compose_file" 2>/dev/null | awk '{print $NF}' | tr -d '"' | tr -d "'" | head -1)
+    if [ -z "$current_container" ]; then
+        current_container="$APP_NAME"
+    fi
+    
+    # Extract existing active volumes (skip commented lines)
+    local volumes=()
+    local in_volumes=false
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]+volumes:[[:space:]]*$ ]]; then
+            in_volumes=true
+            continue
+        fi
+        if [ "$in_volumes" = true ]; then
+            # Active volume entry
+            if [[ "$line" =~ ^[[:space:]]+-[[:space:]] ]] && [[ ! "$line" =~ ^[[:space:]]*# ]]; then
+                local vol_entry=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')
+                volumes+=("$vol_entry")
+            # Skip comments
+            elif [[ "$line" =~ ^[[:space:]]*# ]]; then
+                continue
+            # Any other property means end of volumes
+            else
+                break
+            fi
+        fi
+    done < "$compose_file"
+    
+    # Create backup
+    local backup_file="${compose_file}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$compose_file" "$backup_file"
+    colorized_echo green "   ✅ Backup: $backup_file"
+    
+    # Generate new docker-compose.yml from current template
+    cat > "$compose_file" <<EOL
+services:
+  remnanode:
+    container_name: $current_container
+    hostname: $current_container
+    image: $current_image
+    env_file:
+      - .env
+    network_mode: host
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+EOL
+    
+    # Re-add volumes if any existed
+    if [ ${#volumes[@]} -gt 0 ]; then
+        echo "    volumes:" >> "$compose_file"
+        for vol in "${volumes[@]}"; do
+            echo "      - $vol" >> "$compose_file"
+        done
+    fi
+    
+    # Validate the regenerated file
+    colorized_echo blue "   Validating regenerated docker-compose.yml..."
+    if validate_compose_file "$compose_file"; then
+        colorized_echo green "   ✅ docker-compose.yml regenerated successfully"
+        colorized_echo green "   💾 Backup preserved: $backup_file"
+    else
+        colorized_echo red "   ❌ Validation failed! Restoring backup..."
+        if restore_backup "$backup_file" "$compose_file"; then
+            colorized_echo green "   ✅ Backup restored"
+        else
+            colorized_echo red "   ❌ Failed to restore backup!"
+        fi
+        return 1
+    fi
+    
+    return 0
+}
+
 # Старая функция для обратной совместимости (теперь просто вызывает новую)
 # migrate_env_variables() - уже определена выше
 
@@ -2129,6 +2420,12 @@ update_command() {
         
         # Миграция устаревших портов (v4.0.0+)
         migrate_deprecated_ports
+        
+        # Миграция cap_add NET_ADMIN (v4.2.0+)
+        migrate_cap_add
+        
+        # Аудит docker-compose.yml на соответствие актуальному шаблону
+        audit_compose_file
         
         # Проверяем, запущен ли контейнер
         local was_running=false
@@ -3545,7 +3842,7 @@ case "${COMMAND:-menu}" in
     xray-log-err) xray_log_err ;;
     update) update_command ;;
     core-update) update_core_command ;;
-    migrate) migrate_env_variables; migrate_deprecated_ports ;;
+    migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; audit_compose_file ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
     ports) ports_command ;;

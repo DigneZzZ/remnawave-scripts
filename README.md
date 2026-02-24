@@ -276,6 +276,7 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 ### Highlights
 
 - **Xray-core** — auto-detection, interactive version selection, pre-release support
+- **NET_ADMIN capability** (v4.2.0+) — auto-added for IP Management features (view/drop user connections). Auto-migrated on `update`
 - **Log rotation** — 50MB max, 5 files, compressed, no downtime
 - **Config migration** (v2.2.2+) — `APP_PORT` → `NODE_PORT`, `SSL_CERT` → `SECRET_KEY` (auto on `update`)
 - **Dual config** — supports both `.env` and inline docker-compose variables
