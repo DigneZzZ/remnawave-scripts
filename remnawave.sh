@@ -75,6 +75,8 @@ fi
 # Set default app name if not provided
 if [[ "$COMMAND" == "install" || "$COMMAND" == "install-script" ]] && [ -z "$APP_NAME" ]; then
     APP_NAME="remnawave"
+elif [[ "$COMMAND" == "install-subpage-standalone" ]] && [ -z "$APP_NAME" ]; then
+    APP_NAME="remnasub"
 fi
 # Set script name if APP_NAME is not set
 if [ -z "$APP_NAME" ]; then
@@ -10679,6 +10681,9 @@ EOF
     
     detect_compose
     
+    # Install CLI script to /usr/local/bin
+    install_remnawave_script
+    
     # Pull and start container
     colorized_echo blue "📥 Pulling subscription-page image..."
     cd "$APP_DIR"
@@ -10762,12 +10767,6 @@ services:
             options:
                 max-size: "10m"
                 max-file: "3"
-        healthcheck:
-            test: ['CMD-SHELL', 'wget -q --spider http://localhost:\${APP_PORT:-3010}/health || exit 1']
-            interval: 30s
-            timeout: 10s
-            retries: 3
-            start_period: 10s
 
 networks:
     default:
