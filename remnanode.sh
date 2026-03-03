@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.3.0
+# Version: 4.3.1
 set -e
-SCRIPT_VERSION="4.3.0"
+SCRIPT_VERSION="4.3.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -3670,6 +3670,10 @@ autorestart_command() {
         fi
     }
 
+    is_node_really_running() {
+        docker inspect --format='{{.State.Running}}' "$APP_NAME" 2>/dev/null | grep -q "^true$"
+    }
+
     local subcmd="${AUTORESTART_SUBCOMMAND:-}"
 
     if [ -z "$subcmd" ]; then
@@ -3704,7 +3708,17 @@ autorestart_command() {
     case "$subcmd" in
         enable)
             check_running_as_root
-            detect_compose
+
+            if ! is_remnanode_installed; then
+                colorized_echo red "Error: RemnaNode is not installed. Install it first before enabling auto-restart."
+                exit 1
+            fi
+
+            if ! docker compose version >/dev/null 2>&1; then
+                colorized_echo red "Error: Docker Compose v2 (plugin) is required. Install it first."
+                exit 1
+            fi
+            local compose_cmd="docker compose"
 
             local hour="${AUTORESTART_HOUR:-}"
             local minute="${AUTORESTART_MINUTE:-}"
@@ -3716,6 +3730,16 @@ autorestart_command() {
                 field_count=$(echo "$schedule" | awk '{print NF}')
                 if [ "$field_count" -ne 5 ]; then
                     colorized_echo red "Error: --schedule must be a valid 5-field cron expression (e.g. \"0 3 * * *\")."
+                    exit 1
+                fi
+                # Reject newlines and control characters
+                if [[ "$schedule" == *$'\n'* || "$schedule" == *$'\r'* ]]; then
+                    colorized_echo red "Error: --schedule must not contain newline characters."
+                    exit 1
+                fi
+                # Allow only safe cron characters: digits, space, * / , -
+                if [[ ! "$schedule" =~ ^[0-9\ \*/,\-]+$ ]]; then
+                    colorized_echo red "Error: --schedule contains invalid characters. Allowed: digits, space, * / , -"
                     exit 1
                 fi
             elif [ -n "$hour" ] || [ -n "$minute" ]; then
@@ -3763,14 +3787,6 @@ autorestart_command() {
                 schedule="${minute} ${hour} * * *"
             fi
 
-            # Resolve docker compose command string for cron (no shell variable expansion)
-            local compose_cmd
-            if docker compose version >/dev/null 2>&1; then
-                compose_cmd="docker compose"
-            else
-                compose_cmd="docker-compose"
-            fi
-
             # Write cron file
             cat > "$cron_file" <<EOF
 # ${APP_NAME} auto-restart - managed by ${APP_NAME} script
@@ -3779,11 +3795,25 @@ ${schedule} root cd ${APP_DIR} && ${compose_cmd} -f ${COMPOSE_FILE} -p ${APP_NAM
 EOF
             chmod 644 "$cron_file"
 
+            local autorestart_logrotate="/etc/logrotate.d/${APP_NAME}-autorestart"
+            cat > "$autorestart_logrotate" <<EOF
+${cron_log} {
+    size 10M
+    rotate 5
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+            chmod 644 "$autorestart_logrotate"
+
             echo -e "\033[1;32m✅ Auto-restart enabled!\033[0m"
             echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
-            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Schedule:"  "$schedule"
-            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Cron file:" "$cron_file"
-            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Log file:"  "$cron_log"
+            printf "   \033[38;5;15m%-20s\033[0m \033[38;5;117m%s\033[0m\n" "Schedule:"          "$schedule"
+            printf "   \033[38;5;15m%-20s\033[0m \033[38;5;117m%s\033[0m\n" "Cron file:"         "$cron_file"
+            printf "   \033[38;5;15m%-20s\033[0m \033[38;5;117m%s\033[0m\n" "Log file:"          "$cron_log"
+            printf "   \033[38;5;15m%-20s\033[0m \033[38;5;117m%s\033[0m\n" "Logrotate config:"  "$autorestart_logrotate"
             echo
             ;;
 
@@ -3794,6 +3824,8 @@ EOF
                 return 0
             fi
             rm -f "$cron_file"
+            local autorestart_logrotate="/etc/logrotate.d/${APP_NAME}-autorestart"
+            [ -f "$autorestart_logrotate" ] && rm -f "$autorestart_logrotate"
             colorized_echo green "✅ Auto-restart disabled. Cron file removed."
             ;;
 
@@ -3813,7 +3845,7 @@ EOF
             fi
             echo
             if is_remnanode_installed; then
-                if is_remnanode_up; then
+                if is_node_really_running; then
                     printf "   \033[38;5;15m%-18s\033[0m \033[1;32m%s\033[0m\n" "Node status:" "Running"
                 else
                     printf "   \033[38;5;15m%-18s\033[0m \033[1;31m%s\033[0m\n" "Node status:" "Stopped"
@@ -3839,7 +3871,7 @@ EOF
                 colorized_echo red "Error: RemnaNode is not installed."
                 exit 1
             fi
-            if ! is_remnanode_up; then
+            if ! is_node_really_running; then
                 colorized_echo red "Error: RemnaNode is not currently running. Start it first."
                 exit 1
             fi
@@ -3867,7 +3899,7 @@ EOF
             while [ "$elapsed" -lt 30 ]; do
                 sleep 2
                 elapsed=$((elapsed + 2))
-                if is_remnanode_up; then
+                if is_node_really_running; then
                     came_up=true
                     break
                 fi
