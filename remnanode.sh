@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.2.1
+# Version: 4.3.0
 set -e
-SCRIPT_VERSION="4.2.1"
+SCRIPT_VERSION="4.3.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -26,6 +26,14 @@ FORCE_SECRET_KEY=""       # If empty in force mode → will ask interactively
 FORCE_NODE_PORT=""        # If empty in force mode → uses default 3000
 FORCE_XTLS_PORT=""        # If empty in force mode → uses default 61000
 FORCE_INSTALL_XRAY=""     # If empty in force mode → skip xray installation
+
+# ============================================
+# Auto-restart variables
+# ============================================
+AUTORESTART_SUBCOMMAND=""
+AUTORESTART_HOUR=""
+AUTORESTART_MINUTE=""
+AUTORESTART_SCHEDULE=""
 
 while [[ $# -gt 0 ]]; do
     key="$1"
@@ -159,6 +167,69 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             show_command_help "$COMMAND"
             exit 0
+        ;;
+        enable|disable|status|test)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_SUBCOMMAND="$1"
+            else
+                echo "Unknown argument: $key"
+                exit 1
+            fi
+            shift
+        ;;
+        --hour=*)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_HOUR="${1#*=}"
+            else
+                echo "Error: --hour parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
+            shift
+        ;;
+        --hour)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_HOUR="$2"
+                shift 2
+            else
+                echo "Error: --hour parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
+        ;;
+        --minute=*)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_MINUTE="${1#*=}"
+            else
+                echo "Error: --minute parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
+            shift
+        ;;
+        --minute)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_MINUTE="$2"
+                shift 2
+            else
+                echo "Error: --minute parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
+        ;;
+        --schedule=*)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_SCHEDULE="${1#*=}"
+            else
+                echo "Error: --schedule parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
+            shift
+        ;;
+        --schedule)
+            if [[ "$COMMAND" == "auto-restart" ]]; then
+                AUTORESTART_SCHEDULE="$2"
+                shift 2
+            else
+                echo "Error: --schedule parameter is only allowed with 'auto-restart' command."
+                exit 1
+            fi
         ;;
         *)
             echo "Unknown argument: $key"
@@ -3589,6 +3660,236 @@ ports_command() {
 }
 
 
+autorestart_command() {
+    local cron_file="/etc/cron.d/${APP_NAME}-autorestart"
+    local cron_log="/var/log/${APP_NAME}-autorestart.log"
+
+    get_autorestart_schedule() {
+        if [ -f "$cron_file" ]; then
+            grep -v '^#' "$cron_file" | grep -v '^$' | grep -v '^[A-Z]' | awk '{print $1" "$2" "$3" "$4" "$5}' | head -1
+        fi
+    }
+
+    local subcmd="${AUTORESTART_SUBCOMMAND:-}"
+
+    if [ -z "$subcmd" ]; then
+        echo -e "\033[1;37m⏰ Auto-Restart Configuration\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        echo
+        echo -e "\033[1;37m📖 Usage:\033[0m"
+        echo -e "   \033[38;5;15m$APP_NAME auto-restart\033[0m \033[38;5;244m<subcommand> [options]\033[0m"
+        echo
+        echo -e "\033[1;37m🔧 Subcommands:\033[0m"
+        printf "   \033[38;5;15m%-12s\033[0m %s\n" "enable"  "Create/update the cron job for scheduled restarts"
+        printf "   \033[38;5;15m%-12s\033[0m %s\n" "disable" "Remove the scheduled restart cron job"
+        printf "   \033[38;5;15m%-12s\033[0m %s\n" "status"  "Show current schedule and node status"
+        printf "   \033[38;5;15m%-12s\033[0m %s\n" "test"    "Perform a test restart and verify node comes back up"
+        echo
+        echo -e "\033[1;37m⚙️  Enable Options:\033[0m"
+        printf "   \033[38;5;244m%-20s\033[0m %s\n" "--hour=N"         "Hour (0-23) for daily restart (minute defaults to 0)"
+        printf "   \033[38;5;244m%-20s\033[0m %s\n" "--minute=N"       "Minute (0-59), requires --hour"
+        printf "   \033[38;5;244m%-20s\033[0m %s\n" "--schedule=EXPR"  "Full 5-field cron expression (overrides --hour/--minute)"
+        echo
+        echo -e "\033[1;37m📋 Examples:\033[0m"
+        echo -e "\033[38;5;244m   sudo $APP_NAME auto-restart enable --hour=3\033[0m"
+        echo -e "\033[38;5;244m   sudo $APP_NAME auto-restart enable --hour=3 --minute=30\033[0m"
+        echo -e "\033[38;5;244m   sudo $APP_NAME auto-restart enable --schedule=\"30 2 * * 0\"\033[0m"
+        echo -e "\033[38;5;244m   $APP_NAME auto-restart status\033[0m"
+        echo -e "\033[38;5;244m   sudo $APP_NAME auto-restart disable\033[0m"
+        echo -e "\033[38;5;244m   sudo $APP_NAME auto-restart test\033[0m"
+        echo
+        return 0
+    fi
+
+    case "$subcmd" in
+        enable)
+            check_running_as_root
+            detect_compose
+
+            local hour="${AUTORESTART_HOUR:-}"
+            local minute="${AUTORESTART_MINUTE:-}"
+            local schedule="${AUTORESTART_SCHEDULE:-}"
+
+            if [ -n "$schedule" ]; then
+                # Validate: must be exactly 5 fields
+                local field_count
+                field_count=$(echo "$schedule" | awk '{print NF}')
+                if [ "$field_count" -ne 5 ]; then
+                    colorized_echo red "Error: --schedule must be a valid 5-field cron expression (e.g. \"0 3 * * *\")."
+                    exit 1
+                fi
+            elif [ -n "$hour" ] || [ -n "$minute" ]; then
+                # Validate hour
+                if [ -z "$hour" ]; then
+                    colorized_echo red "Error: --minute requires --hour to be specified."
+                    exit 1
+                fi
+                if ! [[ "$hour" =~ ^[0-9]+$ ]] || [ "$hour" -lt 0 ] || [ "$hour" -gt 23 ]; then
+                    colorized_echo red "Error: --hour must be an integer between 0 and 23."
+                    exit 1
+                fi
+                if [ -z "$minute" ]; then
+                    minute=0
+                fi
+                if ! [[ "$minute" =~ ^[0-9]+$ ]] || [ "$minute" -lt 0 ] || [ "$minute" -gt 59 ]; then
+                    colorized_echo red "Error: --minute must be an integer between 0 and 59."
+                    exit 1
+                fi
+                schedule="${minute} ${hour} * * *"
+            else
+                # Interactive mode
+                echo -e "\033[1;37m⏰ Configure Auto-Restart Schedule\033[0m"
+                echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
+                local current_schedule
+                current_schedule=$(get_autorestart_schedule)
+                if [ -n "$current_schedule" ]; then
+                    echo -e "\033[38;5;244mCurrent schedule: \033[38;5;15m$current_schedule\033[0m"
+                else
+                    echo -e "\033[38;5;244mNo schedule currently configured.\033[0m"
+                fi
+                echo
+                read -rp "$(echo -e "\033[38;5;15mEnter hour (0-23) [3]: \033[0m")" hour
+                hour="${hour:-3}"
+                if ! [[ "$hour" =~ ^[0-9]+$ ]] || [ "$hour" -lt 0 ] || [ "$hour" -gt 23 ]; then
+                    colorized_echo red "Error: hour must be an integer between 0 and 23."
+                    exit 1
+                fi
+                read -rp "$(echo -e "\033[38;5;15mEnter minute (0-59) [0]: \033[0m")" minute
+                minute="${minute:-0}"
+                if ! [[ "$minute" =~ ^[0-9]+$ ]] || [ "$minute" -lt 0 ] || [ "$minute" -gt 59 ]; then
+                    colorized_echo red "Error: minute must be an integer between 0 and 59."
+                    exit 1
+                fi
+                schedule="${minute} ${hour} * * *"
+            fi
+
+            # Resolve docker compose command string for cron (no shell variable expansion)
+            local compose_cmd
+            if docker compose version >/dev/null 2>&1; then
+                compose_cmd="docker compose"
+            else
+                compose_cmd="docker-compose"
+            fi
+
+            # Write cron file
+            cat > "$cron_file" <<EOF
+# ${APP_NAME} auto-restart - managed by ${APP_NAME} script
+# To disable: sudo ${APP_NAME} auto-restart disable
+${schedule} root cd ${APP_DIR} && ${compose_cmd} -f ${COMPOSE_FILE} -p ${APP_NAME} down >/dev/null 2>&1 && ${compose_cmd} -f ${COMPOSE_FILE} -p ${APP_NAME} up -d >/dev/null 2>&1 && echo "\$(date '+\%Y-\%m-\%d \%H:\%M:\%S'): [OK] ${APP_NAME} restarted" >> ${cron_log} || echo "\$(date '+\%Y-\%m-\%d \%H:\%M:\%S'): [FAIL] ${APP_NAME} restart failed" >> ${cron_log}
+EOF
+            chmod 644 "$cron_file"
+
+            echo -e "\033[1;32m✅ Auto-restart enabled!\033[0m"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
+            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Schedule:"  "$schedule"
+            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Cron file:" "$cron_file"
+            printf "   \033[38;5;15m%-16s\033[0m \033[38;5;117m%s\033[0m\n" "Log file:"  "$cron_log"
+            echo
+            ;;
+
+        disable)
+            check_running_as_root
+            if [ ! -f "$cron_file" ]; then
+                colorized_echo yellow "Auto-restart is not currently enabled (cron file not found)."
+                return 0
+            fi
+            rm -f "$cron_file"
+            colorized_echo green "✅ Auto-restart disabled. Cron file removed."
+            ;;
+
+        status)
+            echo -e "\033[1;37m⏰ Auto-Restart Status\033[0m"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
+            echo
+            local current_schedule
+            current_schedule=$(get_autorestart_schedule)
+            if [ -f "$cron_file" ] && [ -n "$current_schedule" ]; then
+                printf "   \033[38;5;15m%-18s\033[0m \033[1;32m%s\033[0m\n" "Auto-restart:" "Enabled"
+                printf "   \033[38;5;15m%-18s\033[0m \033[38;5;117m%s\033[0m\n" "Schedule:" "$current_schedule"
+                printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Cron file:" "$cron_file"
+                printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Log file:" "$cron_log"
+            else
+                printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Auto-restart:" "Disabled (no cron file)"
+            fi
+            echo
+            if is_remnanode_installed; then
+                if is_remnanode_up; then
+                    printf "   \033[38;5;15m%-18s\033[0m \033[1;32m%s\033[0m\n" "Node status:" "Running"
+                else
+                    printf "   \033[38;5;15m%-18s\033[0m \033[1;31m%s\033[0m\n" "Node status:" "Stopped"
+                fi
+            else
+                printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Node status:" "Not installed"
+            fi
+            echo
+            if [ -f "$cron_log" ]; then
+                echo -e "\033[1;37m📋 Recent log entries:\033[0m"
+                tail -5 "$cron_log" | while IFS= read -r line; do
+                    echo -e "   \033[38;5;244m$line\033[0m"
+                done
+                echo
+            fi
+            ;;
+
+        test)
+            check_running_as_root
+            detect_compose
+
+            if ! is_remnanode_installed; then
+                colorized_echo red "Error: RemnaNode is not installed."
+                exit 1
+            fi
+            if ! is_remnanode_up; then
+                colorized_echo red "Error: RemnaNode is not currently running. Start it first."
+                exit 1
+            fi
+
+            echo -e "\033[1;37m🧪 Auto-Restart Test\033[0m"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 45))\033[0m"
+            echo -e "\033[1;33m⚠️  This will briefly stop and restart RemnaNode.\033[0m"
+            echo
+            read -rp "$(echo -e "\033[38;5;15mContinue? [y/N]: \033[0m")" confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                colorized_echo yellow "Test cancelled."
+                return 0
+            fi
+
+            echo
+            echo -e "\033[38;5;250m⏹️  Stopping RemnaNode...\033[0m"
+            down_remnanode >/dev/null 2>&1
+
+            echo -e "\033[38;5;250m▶️  Starting RemnaNode...\033[0m"
+            $COMPOSE -f "$COMPOSE_FILE" -p "$APP_NAME" up -d --remove-orphans >/dev/null 2>&1
+
+            echo -e "\033[38;5;250m⏳ Waiting for node to come up (up to 30s)...\033[0m"
+            local elapsed=0
+            local came_up=false
+            while [ "$elapsed" -lt 30 ]; do
+                sleep 2
+                elapsed=$((elapsed + 2))
+                if is_remnanode_up; then
+                    came_up=true
+                    break
+                fi
+            done
+
+            if [ "$came_up" = true ]; then
+                colorized_echo green "✅ Test passed! RemnaNode restarted and came back up in ~${elapsed}s."
+            else
+                colorized_echo red "❌ Test failed: RemnaNode did not come back up within 30 seconds."
+                exit 1
+            fi
+            ;;
+
+        *)
+            colorized_echo red "Unknown auto-restart subcommand: $subcmd"
+            echo -e "Available subcommands: \033[38;5;15menable disable status test\033[0m"
+            exit 1
+            ;;
+    esac
+}
+
+
 usage() {
     clear
 
@@ -3638,6 +3939,7 @@ usage() {
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "edit-env" "🔐 Edit environment (.env)"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "ports" "🔌 Show ports configuration"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "enable-socket" "🔗 Enable selfsteal socket access"
+    printf "   \033[38;5;178m%-18s\033[0m %s\n" "auto-restart" "⏰ Configure scheduled auto-restart"
     echo
 
     echo -e "\033[1;37m📋 Information:\033[0m"
@@ -3811,6 +4113,7 @@ main_menu() {
         echo -e "   \033[38;5;15m14)\033[0m 🔐 Edit environment (.env)"
         echo -e "   \033[38;5;15m15)\033[0m 🔌 Show ports configuration"
         echo -e "   \033[38;5;15m16)\033[0m 🗂️  Setup log rotation"
+        echo -e "   \033[38;5;15m17)\033[0m ⏰ Auto-restart schedule"
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
         echo -e "\033[38;5;15m   0)\033[0m 🚪 Exit to terminal"
@@ -3835,7 +4138,7 @@ main_menu() {
         
         echo -e "\033[38;5;8mRemnaNode CLI v$SCRIPT_VERSION by DigneZzZ • gig.ovh\033[0m"
         echo
-        read -p "$(echo -e "\033[1;37mSelect option [0-16]:\033[0m ")" choice
+        read -p "$(echo -e "\033[1;37mSelect option [0-17]:\033[0m ")" choice
 
         case "$choice" in
             1) install_command; read -p "Press Enter to continue..." ;;
@@ -3854,6 +4157,7 @@ main_menu() {
             14) edit_env_command; read -p "Press Enter to continue..." ;;
             15) ports_command; read -p "Press Enter to continue..." ;;
             16) setup_log_rotation; read -p "Press Enter to continue..." ;;
+            17) autorestart_command; read -p "Press Enter to continue..." ;;
             0) clear; exit 0 ;;
             *) 
                 echo -e "\033[1;31m❌ Invalid option!\033[0m"
@@ -3884,6 +4188,7 @@ case "${COMMAND:-menu}" in
     ports) ports_command ;;
     setup-logs) setup_log_rotation ;;
     enable-socket) enable_socket_command ;;
+    auto-restart) autorestart_command ;;
     help|--help|-h) usage ;;
     version|--version|-v) show_version ;;
     menu) main_menu ;;
