@@ -10882,8 +10882,6 @@ services:
       - caddy-ssl-data:/data
     env_file:
       - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     logging:
       driver: "json-file"
       options:
