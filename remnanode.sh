@@ -4025,6 +4025,102 @@ show_version() {
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 40))\033[0m"
 }
 
+autorestart_menu() {
+    local cron_file="/etc/cron.d/${APP_NAME}-autorestart"
+    local cron_log="/var/log/${APP_NAME}-autorestart.log"
+
+    _ar_get_schedule() {
+        if [ -f "$cron_file" ]; then
+            grep -v '^#' "$cron_file" | grep -v '^$' | grep -v '^[A-Z]' | awk '{print $1" "$2" "$3" "$4" "$5}' | head -1
+        fi
+    }
+
+    _ar_is_running() {
+        docker inspect --format='{{.State.Running}}' "$APP_NAME" 2>/dev/null | grep -q "^true$"
+    }
+
+    while true; do
+        clear
+        echo -e "\033[1;37m⏰ Auto-Restart Schedule\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        echo
+
+        # Current status block
+        local current_schedule
+        current_schedule=$(_ar_get_schedule)
+        if [ -f "$cron_file" ] && [ -n "$current_schedule" ]; then
+            printf "   \033[38;5;15m%-18s\033[0m \033[1;32m%s\033[0m\n" "Auto-restart:" "Enabled"
+            printf "   \033[38;5;15m%-18s\033[0m \033[38;5;117m%s\033[0m\n" "Schedule:" "$current_schedule"
+        else
+            printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Auto-restart:" "Disabled"
+        fi
+
+        if is_remnanode_installed; then
+            if _ar_is_running; then
+                printf "   \033[38;5;15m%-18s\033[0m \033[1;32m%s\033[0m\n" "Node status:" "Running"
+            else
+                printf "   \033[38;5;15m%-18s\033[0m \033[1;31m%s\033[0m\n" "Node status:" "Stopped"
+            fi
+        else
+            printf "   \033[38;5;15m%-18s\033[0m \033[38;5;244m%s\033[0m\n" "Node status:" "Not installed"
+        fi
+        echo
+
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        if [ -f "$cron_file" ] && [ -n "$current_schedule" ]; then
+            echo -e "   \033[38;5;15m1)\033[0m ✏️  Update schedule"
+            echo -e "   \033[38;5;15m2)\033[0m 🚫 Disable auto-restart"
+        else
+            echo -e "   \033[38;5;15m1)\033[0m ✅ Enable auto-restart"
+            echo -e "   \033[38;5;244m   2) Disable (not active)\033[0m"
+        fi
+        echo -e "   \033[38;5;15m3)\033[0m 📊 Show status & logs"
+        echo -e "   \033[38;5;15m4)\033[0m 🧪 Test restart"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 55))\033[0m"
+        echo -e "\033[38;5;15m   0)\033[0m 🔙 Back to main menu"
+        echo
+        read -p "$(echo -e "\033[1;37mSelect option [0-4]:\033[0m ")" ar_choice
+
+        case "$ar_choice" in
+            1)
+                AUTORESTART_SUBCOMMAND="enable"
+                AUTORESTART_HOUR=""
+                AUTORESTART_MINUTE=""
+                AUTORESTART_SCHEDULE=""
+                autorestart_command
+                read -p "Press Enter to continue..."
+                ;;
+            2)
+                if [ ! -f "$cron_file" ]; then
+                    echo -e "\033[1;33m⚠️  Auto-restart is not currently enabled.\033[0m"
+                    read -p "Press Enter to continue..."
+                else
+                    AUTORESTART_SUBCOMMAND="disable"
+                    autorestart_command
+                    read -p "Press Enter to continue..."
+                fi
+                ;;
+            3)
+                AUTORESTART_SUBCOMMAND="status"
+                autorestart_command
+                read -p "Press Enter to continue..."
+                ;;
+            4)
+                AUTORESTART_SUBCOMMAND="test"
+                autorestart_command
+                read -p "Press Enter to continue..."
+                ;;
+            0)
+                break
+                ;;
+            *)
+                echo -e "\033[1;31m❌ Invalid option!\033[0m"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 main_menu() {
     while true; do
         clear
@@ -4189,7 +4285,7 @@ main_menu() {
             14) edit_env_command; read -p "Press Enter to continue..." ;;
             15) ports_command; read -p "Press Enter to continue..." ;;
             16) setup_log_rotation; read -p "Press Enter to continue..." ;;
-            17) autorestart_command; read -p "Press Enter to continue..." ;;
+            17) autorestart_menu ;;
             0) clear; exit 0 ;;
             *) 
                 echo -e "\033[1;31m❌ Invalid option!\033[0m"
