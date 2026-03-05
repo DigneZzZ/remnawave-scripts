@@ -10760,8 +10760,6 @@ services:
         restart: always
         env_file:
             - .env.subscription
-        ports:
-            - '127.0.0.1:${sub_port}:\${APP_PORT:-3010}'
         logging:
             driver: "json-file"
             options:
@@ -10884,19 +10882,23 @@ services:
       - caddy-ssl-data:/data
     env_file:
       - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - ${APP_NAME}-standalone-network
 
 volumes:
   caddy-ssl-data:
     driver: local
     external: false
     name: caddy-standalone-ssl-data
+
+networks:
+  ${APP_NAME}-standalone-network:
+    external: true
 EOF
     colorized_echo green "✅ docker-compose.yml created"
     
@@ -10923,12 +10925,12 @@ https://{\$SUB_DOMAIN} {
     
     # Health check endpoint
     handle /health {
-        reverse_proxy host.docker.internal:{\$SUB_PORT}
+        reverse_proxy ${APP_NAME}-subscription-page:{\$SUB_PORT}
     }
     
     # All requests go to subscription-page
     handle /* {
-        reverse_proxy host.docker.internal:{\$SUB_PORT} {
+        reverse_proxy ${APP_NAME}-subscription-page:{\$SUB_PORT} {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
