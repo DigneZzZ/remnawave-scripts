@@ -270,6 +270,7 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 | `edit` / `edit-env` | Edit configs |
 | `setup-logs` | Configure log rotation |
 | `xray_log_out` / `xray_log_err` | Xray real-time logs |
+| `auto-restart` | Configure scheduled auto-restart (enable/disable/status/test) |
 
 </details>
 
