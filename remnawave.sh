@@ -6978,60 +6978,78 @@ CADDY_VERSION="2.10.2"
 check_existing_webserver() {
     local found_webserver=""
     
-    # Check for Nginx service
+    # Helper to append detected webserver
+    _append_ws() {
+        if [ -n "$found_webserver" ]; then
+            found_webserver="$found_webserver, $1"
+        else
+            found_webserver="$1"
+        fi
+    }
+    
+    # --- Check installed packages (even if not running) ---
+    if command -v nginx >/dev/null 2>&1; then
+        local nginx_ver=$(nginx -v 2>&1 | head -1)
+        _append_ws "nginx binary ($nginx_ver)"
+    elif dpkg -l nginx 2>/dev/null | grep -q "^ii"; then
+        _append_ws "nginx (installed package)"
+    fi
+    
+    if command -v caddy >/dev/null 2>&1; then
+        # Exclude our own docker-based caddy
+        local caddy_path=$(command -v caddy 2>/dev/null)
+        if [[ "$caddy_path" != */docker* ]]; then
+            _append_ws "caddy binary ($caddy_path)"
+        fi
+    elif dpkg -l caddy 2>/dev/null | grep -q "^ii"; then
+        _append_ws "caddy (installed package)"
+    fi
+    
+    # --- Check systemd services (active or enabled) ---
     if systemctl is-active --quiet nginx 2>/dev/null; then
-        found_webserver="nginx (systemd service)"
+        _append_ws "nginx (systemd: active)"
+    elif systemctl is-enabled --quiet nginx 2>/dev/null; then
+        _append_ws "nginx (systemd: enabled, not running)"
     fi
     
-    # Check for Apache service
-    if systemctl is-active --quiet apache2 2>/dev/null || systemctl is-active --quiet httpd 2>/dev/null; then
-        if [ -n "$found_webserver" ]; then
-            found_webserver="$found_webserver, apache"
-        else
-            found_webserver="apache (systemd service)"
-        fi
-    fi
-    
-    # Check for Caddy service
     if systemctl is-active --quiet caddy 2>/dev/null; then
-        if [ -n "$found_webserver" ]; then
-            found_webserver="$found_webserver, caddy"
-        else
-            found_webserver="caddy (systemd service)"
-        fi
+        _append_ws "caddy (systemd: active)"
+    elif systemctl is-enabled --quiet caddy 2>/dev/null; then
+        _append_ws "caddy (systemd: enabled, not running)"
     fi
     
-    # Check for nginx docker containers
+    if systemctl is-active --quiet apache2 2>/dev/null || systemctl is-active --quiet httpd 2>/dev/null; then
+        _append_ws "apache (systemd: active)"
+    fi
+    
+    # --- Check running Docker containers ---
     local nginx_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "nginx|openresty" || true)
     if [ -n "$nginx_containers" ]; then
-        if [ -n "$found_webserver" ]; then
-            found_webserver="$found_webserver, nginx docker ($nginx_containers)"
-        else
-            found_webserver="nginx docker ($nginx_containers)"
-        fi
+        _append_ws "nginx docker: running ($nginx_containers)"
     fi
     
-    # Check for caddy docker containers
-    local caddy_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "caddy" || true)
+    local caddy_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "caddy" | grep -v "caddy-remnawave" || true)
     if [ -n "$caddy_containers" ]; then
-        if [ -n "$found_webserver" ]; then
-            found_webserver="$found_webserver, caddy docker ($caddy_containers)"
-        else
-            found_webserver="caddy docker ($caddy_containers)"
-        fi
+        _append_ws "caddy docker: running ($caddy_containers)"
     fi
     
-    # Check for traefik docker containers
     local traefik_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE "traefik" || true)
     if [ -n "$traefik_containers" ]; then
-        if [ -n "$found_webserver" ]; then
-            found_webserver="$found_webserver, traefik docker ($traefik_containers)"
-        else
-            found_webserver="traefik docker ($traefik_containers)"
-        fi
+        _append_ws "traefik docker: running ($traefik_containers)"
     fi
     
-    # Check if port 80 or 443 is in use
+    # --- Check stopped Docker containers that may conflict on restart ---
+    local stopped_nginx=$(docker ps -a --filter "status=exited" --format '{{.Names}}' 2>/dev/null | grep -iE "nginx|openresty" || true)
+    if [ -n "$stopped_nginx" ]; then
+        _append_ws "nginx docker: stopped ($stopped_nginx)"
+    fi
+    
+    local stopped_caddy=$(docker ps -a --filter "status=exited" --format '{{.Names}}' 2>/dev/null | grep -iE "caddy" | grep -v "caddy-remnawave" || true)
+    if [ -n "$stopped_caddy" ]; then
+        _append_ws "caddy docker: stopped ($stopped_caddy)"
+    fi
+    
+    # --- Check if port 80 or 443 is in use ---
     local port80_in_use=""
     local port443_in_use=""
     
@@ -7152,6 +7170,111 @@ install_caddy_reverse_proxy() {
     local sub_port="${4:-3010}"
     local sub_prefix="${5:-sub}"
     local secure_mode="${6:-false}"
+    
+    # If called without arguments, try to read domains from panel .env
+    if [ -z "$panel_domain" ]; then
+        if [ -f "$ENV_FILE" ]; then
+            panel_domain=$(grep "^FRONT_END_DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            local sub_public=$(grep "^SUB_PUBLIC_DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            if [ -n "$sub_public" ]; then
+                # SUB_PUBLIC_DOMAIN format: domain.com/prefix
+                sub_domain=$(echo "$sub_public" | cut -d'/' -f1)
+                local detected_prefix=$(echo "$sub_public" | cut -s -d'/' -f2)
+                if [ -n "$detected_prefix" ]; then
+                    sub_prefix="$detected_prefix"
+                fi
+            fi
+            # Read ports from panel config
+            local env_port=$(grep "^APP_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            if [ -n "$env_port" ]; then
+                panel_port="$env_port"
+            fi
+            if [ -f "$SUB_ENV_FILE" ]; then
+                local sub_env_port=$(grep "^APP_PORT=" "$SUB_ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+                if [ -n "$sub_env_port" ]; then
+                    sub_port="$sub_env_port"
+                fi
+            fi
+        fi
+    fi
+    
+    # If still no panel domain — ask interactively
+    if [ -z "$panel_domain" ] || [ "$panel_domain" = "*" ]; then
+        colorized_echo yellow "⚠️  Could not detect panel domain from configuration."
+        echo
+        while true; do
+            read -p "Enter the panel domain (e.g., panel.example.com): " -r panel_domain
+            panel_domain=$(sanitize_domain "$panel_domain")
+            if [ -z "$panel_domain" ]; then
+                colorized_echo red "Domain cannot be empty"
+            elif [[ "$panel_domain" == http* ]]; then
+                colorized_echo red "Please enter only the domain without http:// or https://"
+            elif ! validate_domain "$panel_domain"; then
+                colorized_echo red "Invalid domain format. Domain should be like: panel.example.com"
+            else
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "$sub_domain" ]; then
+        while true; do
+            read -p "Enter the subscription page domain (e.g., sub.example.com) [$panel_domain]: " -r sub_domain
+            sub_domain=$(sanitize_domain "${sub_domain:-$panel_domain}")
+            if [[ "$sub_domain" == http* ]]; then
+                colorized_echo red "Please enter only the domain without http:// or https://"
+            elif ! validate_domain "$sub_domain"; then
+                colorized_echo red "Invalid domain format. Domain should be like: sub.example.com"
+            else
+                break
+            fi
+        done
+        
+        read -p "Enter the subscription page prefix (default: $sub_prefix): " -r input_prefix
+        if [ -n "$input_prefix" ]; then
+            sub_prefix="$input_prefix"
+        fi
+    fi
+    
+    # Ask about Caddy mode if called without secure_mode argument
+    if [ -z "$6" ]; then
+        echo
+        colorized_echo white "Select Caddy configuration:"
+        echo
+        echo "  1) Simple (default) - Basic reverse proxy"
+        echo "     • SSL certificates via Let's Encrypt"
+        echo "     • No additional authentication"
+        echo
+        echo "  2) Secure - With Caddy Security portal"
+        echo "     • SSL certificates via Let's Encrypt"
+        echo "     • Additional authentication layer before panel"
+        echo "     • API routes remain open for integrations"
+        echo
+        read -p "Choose option [1/2] (default: 1): " -r caddy_mode_choice
+        if [[ "$caddy_mode_choice" == "2" ]]; then
+            secure_mode="true"
+        fi
+        echo
+    fi
+    
+    # Show what will be configured
+    colorized_echo white "📋 Configuration:"
+    echo "   Panel domain:        $panel_domain"
+    if [ "$panel_domain" = "$sub_domain" ]; then
+        echo "   Subscription path:   https://$panel_domain/$sub_prefix/"
+    else
+        echo "   Subscription domain: $sub_domain"
+    fi
+    echo "   Panel port:          $panel_port"
+    echo "   Subscription port:   $sub_port"
+    echo "   Mode:                $([ "$secure_mode" = "true" ] && echo "Secure" || echo "Simple")"
+    echo
+    read -p "Continue with this configuration? (y/n): " -r confirm_install
+    if [[ ! $confirm_install =~ ^[Yy]$ ]]; then
+        colorized_echo gray "Caddy installation cancelled."
+        return 1
+    fi
+    echo
     
     colorized_echo cyan "==================================================="
     if [ "$secure_mode" = "true" ]; then
@@ -8091,7 +8214,7 @@ caddy_up_command() {
     
     if ! is_caddy_installed; then
         colorized_echo red "Caddy is not installed!"
-        colorized_echo yellow "Install Caddy first with: $APP_NAME install"
+        colorized_echo yellow "Install Caddy first with: $APP_NAME caddy install"
         return 1
     fi
     
@@ -8406,6 +8529,9 @@ caddy_command() {
     local action="${1:-status}"
     
     case "$action" in
+        install)
+            install_caddy_reverse_proxy
+            ;;
         up|start)
             caddy_up_command
             ;;
@@ -8433,6 +8559,7 @@ caddy_command() {
         *)
             echo -e "\033[1;37m🌐 Caddy Management Commands:\033[0m"
             echo
+            printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy install" "📦 Install Caddy reverse proxy"
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy" "📊 Show Caddy status"
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy up" "▶️  Start Caddy"
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy down" "⏹️  Stop Caddy"
@@ -12952,6 +13079,7 @@ command_help() {
             echo -e "   \033[38;5;15m$APP_NAME caddy [action]\033[0m"
             echo
             echo -e "\033[1;37mActions:\033[0m"
+            echo -e "   \033[38;5;15minstall\033[0m         Install Caddy reverse proxy"
             echo -e "   \033[38;5;15mstatus\033[0m          Show Caddy status (default)"
             echo -e "   \033[38;5;15mup/start\033[0m        Start Caddy container"
             echo -e "   \033[38;5;15mdown/stop\033[0m       Stop Caddy container"
@@ -12964,9 +13092,11 @@ command_help() {
             echo -e "\033[1;37mFeatures:\033[0m"
             echo -e "   \033[38;5;250m• Automatic SSL certificates (Let's Encrypt)\033[0m"
             echo -e "   \033[38;5;250m• Simple or Secure mode (with auth portal)\033[0m"
+            echo -e "   \033[38;5;250m• Auto-detects domains from panel .env\033[0m"
             echo -e "   \033[38;5;250m• Installed to /opt/caddy-remnawave/\033[0m"
             echo
             echo -e "\033[1;37mExamples:\033[0m"
+            echo -e "   \033[38;5;244m$APP_NAME caddy install\033[0m"
             echo -e "   \033[38;5;244m$APP_NAME caddy\033[0m"
             echo -e "   \033[38;5;244m$APP_NAME caddy restart\033[0m"
             echo -e "   \033[38;5;244m$APP_NAME caddy logs\033[0m"
