@@ -258,6 +258,7 @@ fi
 INSTALL_DIR="/opt"
 APP_DIR="$INSTALL_DIR/$APP_NAME"
 DATA_DIR="/var/lib/$APP_NAME"
+LOG_DIR="/var/log/$APP_NAME"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 ENV_FILE="$APP_DIR/.env"
 XRAY_FILE="$DATA_DIR/xray"
@@ -564,15 +565,15 @@ install_latest_xray_core() {
 
 setup_log_rotation() {
     check_running_as_root
-    
-    # Check if the directory exists
-    if [ ! -d "$DATA_DIR" ]; then
-        colorized_echo blue "Creating directory $DATA_DIR"
-        mkdir -p "$DATA_DIR"
+
+    # Check if the log directory exists
+    if [ ! -d "$LOG_DIR" ]; then
+        colorized_echo blue "Creating directory $LOG_DIR"
+        mkdir -p "$LOG_DIR"
     else
-        colorized_echo green "Directory $DATA_DIR already exists"
+        colorized_echo green "Directory $LOG_DIR already exists"
     fi
-    
+
     # Check if logrotate is installed
     if ! command -v logrotate &> /dev/null; then
         colorized_echo blue "Installing logrotate"
@@ -581,7 +582,7 @@ setup_log_rotation() {
     else
         colorized_echo green "Logrotate is already installed"
     fi
-    
+
     # Check if logrotate config already exists
     LOGROTATE_CONFIG="/etc/logrotate.d/remnanode"
     if [ -f "$LOGROTATE_CONFIG" ]; then
@@ -592,11 +593,11 @@ setup_log_rotation() {
             return
         fi
     fi
-    
+
     # Create logrotate configuration
     colorized_echo blue "Creating logrotate configuration at $LOGROTATE_CONFIG"
     cat > "$LOGROTATE_CONFIG" <<EOL
-$DATA_DIR/*.log {
+$LOG_DIR/*.log {
     size 50M
     rotate 5
     compress
@@ -658,24 +659,24 @@ EOL
         
 
         if grep -q "^${escaped_service_indent}volumes:" "$COMPOSE_FILE"; then
-            if ! grep -q "$DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"; then
-                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+            if ! grep -q "$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
+                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
                 colorized_echo green "Added logs volume to existing volumes section"
             else
                 colorized_echo yellow "Logs volume already exists in volumes section"
             fi
         elif grep -q "^${escaped_service_indent}# volumes:" "$COMPOSE_FILE"; then
             sed -i "s|^${escaped_service_indent}# volumes:|${service_indent}volumes:|g" "$COMPOSE_FILE"
-            
-            if grep -q "^${escaped_volume_item_indent}#.*$DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"; then
-                sed -i "s|^${escaped_volume_item_indent}#.*$DATA_DIR:$DATA_DIR|${volume_item_indent}- $DATA_DIR:$DATA_DIR|g" "$COMPOSE_FILE"
+
+            if grep -q "^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
+                sed -i "s|^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR|${volume_item_indent}- $LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
                 colorized_echo green "Uncommented volumes section and logs volume line"
             else
-                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
                 colorized_echo green "Uncommented volumes section and added logs volume line"
             fi
         else
-            sed -i "/^${escaped_service_indent}restart: always/a\\${service_indent}volumes:\\n${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+            sed -i "/^${escaped_service_indent}restart: always/a\\${service_indent}volumes:\\n${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
             colorized_echo green "Added new volumes section with logs volume"
         fi
         
@@ -1080,7 +1081,7 @@ EOL
         fi
         
         cat >> "$COMPOSE_FILE" <<EOL
-      # - $DATA_DIR:$DATA_DIR
+      # - $LOG_DIR:$LOG_DIR
       # - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     else
@@ -1090,7 +1091,7 @@ EOL
     #   - $XRAY_FILE:/usr/local/bin/xray
     #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
     #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
-    #   - $DATA_DIR:$DATA_DIR
+    #   - $LOG_DIR:$LOG_DIR
     #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     fi
@@ -2332,7 +2333,7 @@ EOL
     #   - $XRAY_FILE:/usr/local/bin/xray
     #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
     #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
-    #   - $DATA_DIR:$DATA_DIR
+    #   - $LOG_DIR:$LOG_DIR
     #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     fi
@@ -4197,10 +4198,10 @@ main_menu() {
                 printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s%% used, %s available\033[0m\n" "Disk Usage:" "$disk_usage" "$disk_available"
                 
                 # Проверяем логи
-                if [ -d "$DATA_DIR" ]; then
-                    local log_files=$(find "$DATA_DIR" -name "*.log" 2>/dev/null | wc -l)
+                if [ -d "$LOG_DIR" ]; then
+                    local log_files=$(find "$LOG_DIR" -name "*.log" 2>/dev/null | wc -l)
                     if [ "$log_files" -gt 0 ]; then
-                        local total_log_size=$(du -sh "$DATA_DIR"/*.log 2>/dev/null | awk '{total+=$1} END {print total"K"}' | sed 's/KK/K/')
+                        local total_log_size=$(du -sh "$LOG_DIR"/*.log 2>/dev/null | awk '{total+=$1} END {print total"K"}' | sed 's/KK/K/')
                         printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s files (%s)\033[0m\n" "Log Files:" "$log_files" "$total_log_size"
                     fi
                 fi

@@ -289,7 +289,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 ├── .env
 └── docker-compose.yml
 
-/var/lib/remnanode/       # Бинарный файл Xray и логи
+/var/lib/remnanode/       # Бинарный файл Xray
+/var/log/remnanode/       # Логи ноды
 /usr/local/bin/remnanode  # CLI команда
 /etc/logrotate.d/remnanode
 ```
@@ -403,7 +404,7 @@ docker stats               # Использование ресурсов
 | Компонент | Путь |
 |-----------|------|
 | Панель | `/opt/remnawave/logs/` |
-| Узел (Xray) | `/var/lib/remnanode/` |
+| Узел (Xray) | `/var/log/remnanode/` |
 | Caddy | `/opt/caddy/logs/` |
 
 Ротация логов: макс. 50MB, хранится 5 файлов, автоматическое сжатие.

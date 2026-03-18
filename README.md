@@ -290,7 +290,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode
 ├── .env
 └── docker-compose.yml
 
-/var/lib/remnanode/       # Xray binary & logs
+/var/lib/remnanode/       # Xray binary
+/var/log/remnanode/       # Node logs
 /usr/local/bin/remnanode  # CLI command
 /etc/logrotate.d/remnanode
 ```
@@ -404,7 +405,7 @@ docker stats               # Resource usage
 | Component | Path |
 |-----------|------|
 | Panel | `/opt/remnawave/logs/` |
-| Node (Xray) | `/var/lib/remnanode/` |
+| Node (Xray) | `/var/log/remnanode/` |
 | Caddy | `/opt/caddy/logs/` |
 
 Log rotation: 50MB max, 5 files kept, compressed automatically.
