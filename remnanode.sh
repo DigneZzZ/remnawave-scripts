@@ -1038,8 +1038,10 @@ EOL
 
     # Determine image based on --dev flag
     IMAGE_TAG="latest"
+    IMAGE_REGISTRY="ghcr.io/remnawave/node"
     if [ "$USE_DEV_BRANCH" == "true" ]; then
         IMAGE_TAG="dev"
+        IMAGE_REGISTRY="remnawave/node"
     fi
 
     colorized_echo blue "Generating docker-compose.yml file"
@@ -1050,7 +1052,7 @@ services:
   remnanode:
     container_name: $APP_NAME
     hostname: $APP_NAME
-    image: ghcr.io/remnawave/node:${IMAGE_TAG}
+    image: ${IMAGE_REGISTRY}:${IMAGE_TAG}
     env_file:
       - .env
     network_mode: host
@@ -2449,7 +2451,13 @@ update_command() {
     echo -e "\033[38;5;250m📝 Step 2:\033[0m Checking local image version..."
     local local_image_id=""
     local local_created=""
-    local image_name="ghcr.io/remnawave/node"
+    # Determine registry from compose file (ghcr.io or Docker Hub)
+    local image_name
+    if grep -q "ghcr.io/remnawave/node" "$COMPOSE_FILE" 2>/dev/null; then
+        image_name="ghcr.io/remnawave/node"
+    else
+        image_name="remnawave/node"
+    fi
     
     if docker images ${image_name}:$current_tag --format "table {{.ID}}\t{{.CreatedAt}}" | grep -v "IMAGE ID" > /dev/null 2>&1; then
         local_image_id=$(docker images ${image_name}:$current_tag --format "{{.ID}}" | head -1)
