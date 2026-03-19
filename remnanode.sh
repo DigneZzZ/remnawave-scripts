@@ -574,6 +574,13 @@ setup_log_rotation() {
         colorized_echo green "Directory $LOG_DIR already exists"
     fi
 
+    # Migration: move existing log files from old location (/var/lib -> /var/log)
+    local OLD_LOG_DIR="/var/lib/$APP_NAME"
+    if ls "$OLD_LOG_DIR"/*.log 1>/dev/null 2>&1; then
+        mv "$OLD_LOG_DIR"/*.log "$LOG_DIR/"
+        colorized_echo blue "Migrated log files from $OLD_LOG_DIR to $LOG_DIR"
+    fi
+
     # Check if logrotate is installed
     if ! command -v logrotate &> /dev/null; then
         colorized_echo blue "Installing logrotate"
@@ -585,6 +592,13 @@ setup_log_rotation() {
 
     # Check if logrotate config already exists
     LOGROTATE_CONFIG="/etc/logrotate.d/remnanode"
+
+    # Migration: update old logrotate config path (/var/lib -> /var/log)
+    if [ -f "$LOGROTATE_CONFIG" ] && grep -q "$OLD_LOG_DIR" "$LOGROTATE_CONFIG"; then
+        sed -i "s|$OLD_LOG_DIR|$LOG_DIR|g" "$LOGROTATE_CONFIG"
+        colorized_echo blue "Migrated logrotate config: $OLD_LOG_DIR -> $LOG_DIR"
+    fi
+
     if [ -f "$LOGROTATE_CONFIG" ]; then
         colorized_echo yellow "Logrotate configuration already exists at $LOGROTATE_CONFIG"
         read -p "Do you want to overwrite it? (y/n): " -r overwrite
@@ -642,7 +656,19 @@ EOL
             colorized_echo red "Failed to create backup"
             return
         fi
-        
+
+        # Migration: /var/lib/$APP_NAME -> /var/log/$APP_NAME for log volumes
+        # Migrate active volume line
+        if grep -q "$OLD_LOG_DIR:$OLD_LOG_DIR" "$COMPOSE_FILE" 2>/dev/null; then
+            sed -i "s|$OLD_LOG_DIR:$OLD_LOG_DIR|$LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
+            colorized_echo blue "Migrated volume: $OLD_LOG_DIR -> $LOG_DIR"
+        fi
+
+        # Migrate commented volume line (handles "# - path" and "#   - path")
+        if grep -q "#.*- $OLD_LOG_DIR:$OLD_LOG_DIR" "$COMPOSE_FILE" 2>/dev/null; then
+            sed -i "s|#\(.*- \)$OLD_LOG_DIR:$OLD_LOG_DIR|#\1$LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
+            colorized_echo blue "Migrated commented volume: $OLD_LOG_DIR -> $LOG_DIR"
+        fi
 
         local service_indent=$(get_service_property_indentation "$COMPOSE_FILE")
         local indent_type=""
@@ -1206,6 +1232,9 @@ up_remnanode() {
 
     # Run migration for cap_add NET_ADMIN (silent mode)
     migrate_cap_add 2>/dev/null || true
+
+    # Run migration for log volumes /var/lib -> /var/log (silent mode)
+    migrate_log_volumes 2>/dev/null || true
 
     # Pull images with retry to handle transient network failures
     docker_pull_with_retry
@@ -2139,6 +2168,82 @@ migrate_cap_add() {
 }
 
 # ============================================
+# Migration: /var/lib/$APP_NAME -> /var/log/$APP_NAME
+# Handles log volumes, logrotate config, and log files
+# ============================================
+migrate_log_volumes() {
+    local compose_file="$COMPOSE_FILE"
+    local old_log_dir="/var/lib/$APP_NAME"
+    local new_log_dir="$LOG_DIR"
+    local migrated=false
+
+    # Skip if old path doesn't exist anywhere
+    if [ ! -f "$compose_file" ] && [ ! -d "$old_log_dir" ] && \
+       ! grep -q "$old_log_dir" /etc/logrotate.d/remnanode 2>/dev/null; then
+        return 0
+    fi
+
+    # Migrate docker-compose.yml volumes
+    if [ -f "$compose_file" ]; then
+        # Migrate active volume line
+        if grep -q "$old_log_dir:$old_log_dir" "$compose_file" 2>/dev/null; then
+            if [ "$migrated" = false ]; then
+                echo
+                colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+                echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+                migrated=true
+            fi
+            sed -i "s|$old_log_dir:$old_log_dir|$new_log_dir:$new_log_dir|g" "$compose_file"
+            colorized_echo blue "   Migrated volume: $old_log_dir -> $new_log_dir"
+        fi
+
+        # Migrate commented volume line
+        if grep -q "#.*- $old_log_dir:$old_log_dir" "$compose_file" 2>/dev/null; then
+            if [ "$migrated" = false ]; then
+                echo
+                colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+                echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+                migrated=true
+            fi
+            sed -i "s|#\(.*- \)$old_log_dir:$old_log_dir|#\1$new_log_dir:$new_log_dir|g" "$compose_file"
+            colorized_echo blue "   Migrated commented volume"
+        fi
+    fi
+
+    # Migrate logrotate config
+    local logrotate_config="/etc/logrotate.d/remnanode"
+    if [ -f "$logrotate_config" ] && grep -q "$old_log_dir" "$logrotate_config" 2>/dev/null; then
+        if [ "$migrated" = false ]; then
+            echo
+            colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+            migrated=true
+        fi
+        sed -i "s|$old_log_dir|$new_log_dir|g" "$logrotate_config"
+        colorized_echo blue "   Migrated logrotate config"
+    fi
+
+    # Migrate log files
+    if ls "$old_log_dir"/*.log 1>/dev/null 2>&1; then
+        if [ "$migrated" = false ]; then
+            echo
+            colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+            migrated=true
+        fi
+        mkdir -p "$new_log_dir"
+        mv "$old_log_dir"/*.log "$new_log_dir/"
+        colorized_echo blue "   Migrated log files to $new_log_dir"
+    fi
+
+    if [ "$migrated" = true ]; then
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    fi
+
+    return 0
+}
+
+# ============================================
 # Audit: Check docker-compose.yml against current template (v4.2.0)
 # - No inline environment vars → offer to regenerate from template
 # - Has inline environment vars → only add missing cap_add silently
@@ -2528,9 +2633,12 @@ update_command() {
         
         # Миграция устаревших портов (v4.0.0+)
         migrate_deprecated_ports
-        
+
         # Миграция cap_add NET_ADMIN (v4.2.0+)
         migrate_cap_add
+
+        # Миграция log volumes /var/lib -> /var/log (v4.3.0+)
+        migrate_log_volumes
         
         # Аудит docker-compose.yml на соответствие актуальному шаблону
         audit_compose_file
@@ -4311,7 +4419,7 @@ case "${COMMAND:-menu}" in
     xray-log-err) xray_log_err ;;
     update) update_command ;;
     core-update) update_core_command ;;
-    migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; audit_compose_file ;;
+    migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; migrate_log_volumes; audit_compose_file ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
     ports) ports_command ;;
