@@ -258,6 +258,7 @@ fi
 INSTALL_DIR="/opt"
 APP_DIR="$INSTALL_DIR/$APP_NAME"
 DATA_DIR="/var/lib/$APP_NAME"
+LOG_DIR="/var/log/$APP_NAME"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 ENV_FILE="$APP_DIR/.env"
 XRAY_FILE="$DATA_DIR/xray"
@@ -564,15 +565,22 @@ install_latest_xray_core() {
 
 setup_log_rotation() {
     check_running_as_root
-    
-    # Check if the directory exists
-    if [ ! -d "$DATA_DIR" ]; then
-        colorized_echo blue "Creating directory $DATA_DIR"
-        mkdir -p "$DATA_DIR"
+
+    # Check if the log directory exists
+    if [ ! -d "$LOG_DIR" ]; then
+        colorized_echo blue "Creating directory $LOG_DIR"
+        mkdir -p "$LOG_DIR"
     else
-        colorized_echo green "Directory $DATA_DIR already exists"
+        colorized_echo green "Directory $LOG_DIR already exists"
     fi
-    
+
+    # Migration: move existing log files from old location (/var/lib -> /var/log)
+    local OLD_LOG_DIR="/var/lib/$APP_NAME"
+    if ls "$OLD_LOG_DIR"/*.log 1>/dev/null 2>&1; then
+        mv "$OLD_LOG_DIR"/*.log "$LOG_DIR/"
+        colorized_echo blue "Migrated log files from $OLD_LOG_DIR to $LOG_DIR"
+    fi
+
     # Check if logrotate is installed
     if ! command -v logrotate &> /dev/null; then
         colorized_echo blue "Installing logrotate"
@@ -581,9 +589,16 @@ setup_log_rotation() {
     else
         colorized_echo green "Logrotate is already installed"
     fi
-    
+
     # Check if logrotate config already exists
     LOGROTATE_CONFIG="/etc/logrotate.d/remnanode"
+
+    # Migration: update old logrotate config path (/var/lib -> /var/log)
+    if [ -f "$LOGROTATE_CONFIG" ] && grep -q "$OLD_LOG_DIR" "$LOGROTATE_CONFIG"; then
+        sed -i "s|$OLD_LOG_DIR|$LOG_DIR|g" "$LOGROTATE_CONFIG"
+        colorized_echo blue "Migrated logrotate config: $OLD_LOG_DIR -> $LOG_DIR"
+    fi
+
     if [ -f "$LOGROTATE_CONFIG" ]; then
         colorized_echo yellow "Logrotate configuration already exists at $LOGROTATE_CONFIG"
         read -p "Do you want to overwrite it? (y/n): " -r overwrite
@@ -592,11 +607,11 @@ setup_log_rotation() {
             return
         fi
     fi
-    
+
     # Create logrotate configuration
     colorized_echo blue "Creating logrotate configuration at $LOGROTATE_CONFIG"
     cat > "$LOGROTATE_CONFIG" <<EOL
-$DATA_DIR/*.log {
+$LOG_DIR/*.log {
     size 50M
     rotate 5
     compress
@@ -641,7 +656,19 @@ EOL
             colorized_echo red "Failed to create backup"
             return
         fi
-        
+
+        # Migration: /var/lib/$APP_NAME -> /var/log/$APP_NAME for log volumes
+        # Migrate active volume line
+        if grep -q "$OLD_LOG_DIR:$OLD_LOG_DIR" "$COMPOSE_FILE" 2>/dev/null; then
+            sed -i "s|$OLD_LOG_DIR:$OLD_LOG_DIR|$LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
+            colorized_echo blue "Migrated volume: $OLD_LOG_DIR -> $LOG_DIR"
+        fi
+
+        # Migrate commented volume line (handles "# - path" and "#   - path")
+        if grep -q "#.*- $OLD_LOG_DIR:$OLD_LOG_DIR" "$COMPOSE_FILE" 2>/dev/null; then
+            sed -i "s|#\(.*- \)$OLD_LOG_DIR:$OLD_LOG_DIR|#\1$LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
+            colorized_echo blue "Migrated commented volume: $OLD_LOG_DIR -> $LOG_DIR"
+        fi
 
         local service_indent=$(get_service_property_indentation "$COMPOSE_FILE")
         local indent_type=""
@@ -658,24 +685,24 @@ EOL
         
 
         if grep -q "^${escaped_service_indent}volumes:" "$COMPOSE_FILE"; then
-            if ! grep -q "$DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"; then
-                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+            if ! grep -q "$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
+                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
                 colorized_echo green "Added logs volume to existing volumes section"
             else
                 colorized_echo yellow "Logs volume already exists in volumes section"
             fi
         elif grep -q "^${escaped_service_indent}# volumes:" "$COMPOSE_FILE"; then
             sed -i "s|^${escaped_service_indent}# volumes:|${service_indent}volumes:|g" "$COMPOSE_FILE"
-            
-            if grep -q "^${escaped_volume_item_indent}#.*$DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"; then
-                sed -i "s|^${escaped_volume_item_indent}#.*$DATA_DIR:$DATA_DIR|${volume_item_indent}- $DATA_DIR:$DATA_DIR|g" "$COMPOSE_FILE"
+
+            if grep -q "^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
+                sed -i "s|^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR|${volume_item_indent}- $LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
                 colorized_echo green "Uncommented volumes section and logs volume line"
             else
-                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+                sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
                 colorized_echo green "Uncommented volumes section and added logs volume line"
             fi
         else
-            sed -i "/^${escaped_service_indent}restart: always/a\\${service_indent}volumes:\\n${volume_item_indent}- $DATA_DIR:$DATA_DIR" "$COMPOSE_FILE"
+            sed -i "/^${escaped_service_indent}restart: always/a\\${service_indent}volumes:\\n${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
             colorized_echo green "Added new volumes section with logs volume"
         fi
         
@@ -709,6 +736,16 @@ EOL
     fi
     
     colorized_echo green "Log rotation setup completed successfully"
+    echo
+    echo -e "\033[38;5;250mUsage in Xray config:\033[0m"
+    echo -e "\033[38;5;8m┌──────────────────────────────────────────────────┐\033[0m"
+    echo -e "\033[38;5;8m│\033[0m  \033[38;5;213m\"log\"\033[0m: {                                       \033[38;5;8m│\033[0m"
+    echo -e "\033[38;5;8m│\033[0m      \033[38;5;213m\"error\"\033[0m: \033[38;5;113m\"$LOG_DIR/error.log\"\033[0m,      \033[38;5;8m│\033[0m"
+    echo -e "\033[38;5;8m│\033[0m      \033[38;5;213m\"access\"\033[0m: \033[38;5;113m\"$LOG_DIR/access.log\"\033[0m,    \033[38;5;8m│\033[0m"
+    echo -e "\033[38;5;8m│\033[0m      \033[38;5;213m\"loglevel\"\033[0m: \033[38;5;113m\"warning\"\033[0m                    \033[38;5;8m│\033[0m"
+    echo -e "\033[38;5;8m│\033[0m  }                                              \033[38;5;8m│\033[0m"
+    echo -e "\033[38;5;8m└──────────────────────────────────────────────────┘\033[0m"
+    echo -e "\033[38;5;250mAdd this to your Xray config in the panel to enable logging.\033[0m"
 }
 
 # ============================================
@@ -1082,7 +1119,7 @@ EOL
         fi
         
         cat >> "$COMPOSE_FILE" <<EOL
-      # - $DATA_DIR:$DATA_DIR
+      # - $LOG_DIR:$LOG_DIR
       # - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     else
@@ -1092,7 +1129,7 @@ EOL
     #   - $XRAY_FILE:/usr/local/bin/xray
     #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
     #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
-    #   - $DATA_DIR:$DATA_DIR
+    #   - $LOG_DIR:$LOG_DIR
     #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     fi
@@ -1207,6 +1244,9 @@ up_remnanode() {
 
     # Run migration for cap_add NET_ADMIN (silent mode)
     migrate_cap_add 2>/dev/null || true
+
+    # Run migration for log volumes /var/lib -> /var/log (silent mode)
+    migrate_log_volumes 2>/dev/null || true
 
     # Pull images with retry to handle transient network failures
     docker_pull_with_retry
@@ -2140,6 +2180,91 @@ migrate_cap_add() {
 }
 
 # ============================================
+# Migration: /var/lib/$APP_NAME -> /var/log/$APP_NAME
+# Handles log volumes, logrotate config, and log files
+# ============================================
+migrate_log_volumes() {
+    local compose_file="$COMPOSE_FILE"
+    local old_log_dir="/var/lib/$APP_NAME"
+    local new_log_dir="$LOG_DIR"
+    local migrated=false
+
+    # Skip if old path doesn't exist anywhere
+    if [ ! -f "$compose_file" ] && [ ! -d "$old_log_dir" ] && \
+       ! grep -q "$old_log_dir" /etc/logrotate.d/remnanode 2>/dev/null; then
+        return 0
+    fi
+
+    # Migrate docker-compose.yml volumes
+    if [ -f "$compose_file" ]; then
+        # Migrate active volume line
+        if grep -q "$old_log_dir:$old_log_dir" "$compose_file" 2>/dev/null; then
+            if [ "$migrated" = false ]; then
+                echo
+                colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+                echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+                migrated=true
+            fi
+            sed -i "s|$old_log_dir:$old_log_dir|$new_log_dir:$new_log_dir|g" "$compose_file"
+            colorized_echo blue "   Migrated volume: $old_log_dir -> $new_log_dir"
+        fi
+
+        # Migrate commented volume line
+        if grep -q "#.*- $old_log_dir:$old_log_dir" "$compose_file" 2>/dev/null; then
+            if [ "$migrated" = false ]; then
+                echo
+                colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+                echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+                migrated=true
+            fi
+            sed -i "s|#\(.*- \)$old_log_dir:$old_log_dir|#\1$new_log_dir:$new_log_dir|g" "$compose_file"
+            colorized_echo blue "   Migrated commented volume"
+        fi
+    fi
+
+    # Migrate logrotate config
+    local logrotate_config="/etc/logrotate.d/remnanode"
+    if [ -f "$logrotate_config" ] && grep -q "$old_log_dir" "$logrotate_config" 2>/dev/null; then
+        if [ "$migrated" = false ]; then
+            echo
+            colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+            migrated=true
+        fi
+        sed -i "s|$old_log_dir|$new_log_dir|g" "$logrotate_config"
+        colorized_echo blue "   Migrated logrotate config"
+    fi
+
+    # Migrate log files
+    if ls "$old_log_dir"/*.log 1>/dev/null 2>&1; then
+        if [ "$migrated" = false ]; then
+            echo
+            colorized_echo cyan "🔄 Migration: Log path /var/lib -> /var/log"
+            echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+            migrated=true
+        fi
+        mkdir -p "$new_log_dir"
+        mv "$old_log_dir"/*.log "$new_log_dir/"
+        colorized_echo blue "   Migrated log files to $new_log_dir"
+    fi
+
+    if [ "$migrated" = true ]; then
+        echo
+        echo -e "\033[38;5;250m   Update your Xray config in the panel:\033[0m"
+        echo -e "\033[38;5;8m   ┌──────────────────────────────────────────────────┐\033[0m"
+        echo -e "\033[38;5;8m   │\033[0m  \033[38;5;213m\"log\"\033[0m: {                                       \033[38;5;8m│\033[0m"
+        echo -e "\033[38;5;8m   │\033[0m      \033[38;5;213m\"error\"\033[0m: \033[38;5;113m\"$new_log_dir/error.log\"\033[0m,      \033[38;5;8m│\033[0m"
+        echo -e "\033[38;5;8m   │\033[0m      \033[38;5;213m\"access\"\033[0m: \033[38;5;113m\"$new_log_dir/access.log\"\033[0m,    \033[38;5;8m│\033[0m"
+        echo -e "\033[38;5;8m   │\033[0m      \033[38;5;213m\"loglevel\"\033[0m: \033[38;5;113m\"warning\"\033[0m                    \033[38;5;8m│\033[0m"
+        echo -e "\033[38;5;8m   │\033[0m  }                                              \033[38;5;8m│\033[0m"
+        echo -e "\033[38;5;8m   └──────────────────────────────────────────────────┘\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+    fi
+
+    return 0
+}
+
+# ============================================
 # Audit: Check docker-compose.yml against current template (v4.2.0)
 # - No inline environment vars → offer to regenerate from template
 # - Has inline environment vars → only add missing cap_add silently
@@ -2334,7 +2459,7 @@ EOL
     #   - $XRAY_FILE:/usr/local/bin/xray
     #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
     #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
-    #   - $DATA_DIR:$DATA_DIR
+    #   - $LOG_DIR:$LOG_DIR
     #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     fi
@@ -2535,9 +2660,12 @@ update_command() {
         
         # Миграция устаревших портов (v4.0.0+)
         migrate_deprecated_ports
-        
+
         # Миграция cap_add NET_ADMIN (v4.2.0+)
         migrate_cap_add
+
+        # Миграция log volumes /var/lib -> /var/log (v4.3.0+)
+        migrate_log_volumes
         
         # Аудит docker-compose.yml на соответствие актуальному шаблону
         audit_compose_file
@@ -4205,10 +4333,10 @@ main_menu() {
                 printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s%% used, %s available\033[0m\n" "Disk Usage:" "$disk_usage" "$disk_available"
                 
                 # Проверяем логи
-                if [ -d "$DATA_DIR" ]; then
-                    local log_files=$(find "$DATA_DIR" -name "*.log" 2>/dev/null | wc -l)
+                if [ -d "$LOG_DIR" ]; then
+                    local log_files=$(find "$LOG_DIR" -name "*.log" 2>/dev/null | wc -l)
                     if [ "$log_files" -gt 0 ]; then
-                        local total_log_size=$(du -sh "$DATA_DIR"/*.log 2>/dev/null | awk '{total+=$1} END {print total"K"}' | sed 's/KK/K/')
+                        local total_log_size=$(du -sh "$LOG_DIR"/*.log 2>/dev/null | awk '{total+=$1} END {print total"K"}' | sed 's/KK/K/')
                         printf "   \033[38;5;15m%-12s\033[0m \033[38;5;250m%s files (%s)\033[0m\n" "Log Files:" "$log_files" "$total_log_size"
                     fi
                 fi
@@ -4318,7 +4446,7 @@ case "${COMMAND:-menu}" in
     xray-log-err) xray_log_err ;;
     update) update_command ;;
     core-update) update_core_command ;;
-    migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; audit_compose_file ;;
+    migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; migrate_log_volumes; audit_compose_file ;;
     edit) edit_command ;;
     edit-env) edit_env_command ;;
     ports) ports_command ;;

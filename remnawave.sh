@@ -501,6 +501,102 @@ check_deprecated_env_variables() {
     return 1  # No deprecated variables found
 }
 
+migrate_telegram_notify_v270() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 0
+    fi
+
+    # Проверяем наличие старых переменных
+    local has_old_format=false
+    if grep -q "^TELEGRAM_NOTIFY_USERS_CHAT_ID=" "$ENV_FILE" 2>/dev/null; then
+        has_old_format=true
+    fi
+
+    if [ "$has_old_format" = false ]; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🔄 Migrating Telegram notifications to v2.7.0 format\033[0m"
+
+    # Создаем backup
+    local backup_file="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    # Читаем старые значения
+    local users_chat=$(grep "^TELEGRAM_NOTIFY_USERS_CHAT_ID=" "$ENV_FILE" | cut -d'=' -f2)
+    local users_thread=$(grep "^TELEGRAM_NOTIFY_USERS_THREAD_ID=" "$ENV_FILE" | cut -d'=' -f2)
+    local nodes_chat=$(grep "^TELEGRAM_NOTIFY_NODES_CHAT_ID=" "$ENV_FILE" | cut -d'=' -f2)
+    local nodes_thread=$(grep "^TELEGRAM_NOTIFY_NODES_THREAD_ID=" "$ENV_FILE" | cut -d'=' -f2)
+    local crm_chat=$(grep "^TELEGRAM_NOTIFY_CRM_CHAT_ID=" "$ENV_FILE" | cut -d'=' -f2)
+    local crm_thread=$(grep "^TELEGRAM_NOTIFY_CRM_THREAD_ID=" "$ENV_FILE" | cut -d'=' -f2)
+
+    # Формируем новые значения (chat_id:thread_id или просто chat_id)
+    local users_new="${users_chat}${users_thread:+:$users_thread}"
+    local nodes_new="${nodes_chat}${nodes_thread:+:$nodes_thread}"
+    local crm_new="${crm_chat}${crm_thread:+:$crm_thread}"
+
+    # Удаляем старые переменные
+    sed -i "/^TELEGRAM_NOTIFY_USERS_CHAT_ID=/d" "$ENV_FILE"
+    sed -i "/^TELEGRAM_NOTIFY_NODES_CHAT_ID=/d" "$ENV_FILE"
+    sed -i "/^TELEGRAM_NOTIFY_CRM_CHAT_ID=/d" "$ENV_FILE"
+    sed -i "/^TELEGRAM_NOTIFY_USERS_THREAD_ID=/d" "$ENV_FILE"
+    sed -i "/^TELEGRAM_NOTIFY_NODES_THREAD_ID=/d" "$ENV_FILE"
+    sed -i "/^TELEGRAM_NOTIFY_CRM_THREAD_ID=/d" "$ENV_FILE"
+
+    # Удаляем комментарии про topics
+    sed -i "/^# Only set if you want to use topics$/d" "$ENV_FILE"
+    sed -i "/^# Optional$/d" "$ENV_FILE"
+
+    # Добавляем новые переменные после TELEGRAM_BOT_TOKEN
+    sed -i "/^TELEGRAM_BOT_TOKEN=/a\\
+TELEGRAM_NOTIFY_USERS=$users_new\\
+TELEGRAM_NOTIFY_NODES=$nodes_new\\
+TELEGRAM_NOTIFY_CRM=$crm_new\\
+TELEGRAM_NOTIFY_SERVICE=\\
+TELEGRAM_NOTIFY_TBLOCKER=" "$ENV_FILE"
+
+    # Добавляем PANEL_DOMAIN если отсутствует
+    if ! grep -q "^PANEL_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
+        # Находим позицию после FRONT_END_DOMAIN и добавляем туда
+        if grep -q "^FRONT_END_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "/^FRONT_END_DOMAIN=/a\\
+\\
+### PANEL ###\\
+# Used for generating direct links (e.g., in Telegram notifications)\\
+PANEL_DOMAIN=" "$ENV_FILE"
+        else
+            # Если FRONT_END_DOMAIN нет, добавляем в конец
+            echo "" >> "$ENV_FILE"
+            echo "### PANEL ###" >> "$ENV_FILE"
+            echo "# Used for generating direct links (e.g., in Telegram notifications)" >> "$ENV_FILE"
+            echo "PANEL_DOMAIN=" >> "$ENV_FILE"
+        fi
+    fi
+
+    echo -e "\033[1;32m🎉 Migration completed!\033[0m"
+    echo -e "\033[38;5;250m   Old format: CHAT_ID + THREAD_ID separately\033[0m"
+    echo -e "\033[38;5;250m   New format: chat_id:thread_id combined\033[0m"
+    echo
+    echo -e "\033[38;5;244m   New channels available:\033[0m"
+    echo -e "\033[38;5;244m   • TELEGRAM_NOTIFY_SERVICE (system notifications)\033[0m"
+    echo -e "\033[38;5;244m   • TELEGRAM_NOTIFY_TBLOCKER (Telegram blocker alerts)\033[0m"
+    echo -e "\033[38;5;244m   • PANEL_DOMAIN (for direct links in notifications)\033[0m"
+}
+
+check_telegram_notify_v270_migration_needed() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 1
+    fi
+
+    if grep -q "^TELEGRAM_NOTIFY_USERS_CHAT_ID=" "$ENV_FILE" 2>/dev/null; then
+        return 0  # Migration needed
+    fi
+
+    return 1  # No migration needed
+}
+
 # ===== END ENV MIGRATION FUNCTIONS =====
 
 check_backup_script_version() {
@@ -9333,37 +9429,30 @@ install_remnawave() {
     read -p "Do you want to enable Telegram notifications? (y/n): " -r enable_telegram
     IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
     TELEGRAM_BOT_TOKEN=""
-    TELEGRAM_NOTIFY_USERS_CHAT_ID=""
-    TELEGRAM_NOTIFY_NODES_CHAT_ID=""
-    TELEGRAM_NOTIFY_NODES_THREAD_ID=""
-    TELEGRAM_NOTIFY_USERS_THREAD_ID=""
-    TELEGRAM_NOTIFY_CRM_CHAT_ID=""
-    TELEGRAM_NOTIFY_CRM_THREAD_ID=""
+    TELEGRAM_NOTIFY_USERS=""
+    TELEGRAM_NOTIFY_NODES=""
+    TELEGRAM_NOTIFY_CRM=""
+    TELEGRAM_NOTIFY_SERVICE=""
+    TELEGRAM_NOTIFY_TBLOCKER=""
 
     if [[ "$enable_telegram" =~ ^[Yy]$ ]]; then
         IS_TELEGRAM_NOTIFICATIONS_ENABLED=true
         read -p "Enter your Telegram Bot Token: " -r TELEGRAM_BOT_TOKEN
-        read -p "Enter your Users Notify Chat ID: " -r TELEGRAM_NOTIFY_USERS_CHAT_ID
-        read -p "Enter your Nodes Notify Chat ID (default: same as Users Notify Chat ID): " -r TELEGRAM_NOTIFY_NODES_CHAT_ID
-        if [[ -z "$TELEGRAM_NOTIFY_NODES_CHAT_ID" ]]; then
-            TELEGRAM_NOTIFY_NODES_CHAT_ID="$TELEGRAM_NOTIFY_USERS_CHAT_ID"
+        echo "Format: chat_id or chat_id:thread_id (thread_id is optional for topics)"
+        read -p "Enter TELEGRAM_NOTIFY_USERS: " -r TELEGRAM_NOTIFY_USERS
+        read -p "Enter TELEGRAM_NOTIFY_NODES (default: same as USERS): " -r TELEGRAM_NOTIFY_NODES
+        if [[ -z "$TELEGRAM_NOTIFY_NODES" ]]; then
+            TELEGRAM_NOTIFY_NODES="$TELEGRAM_NOTIFY_USERS"
         fi
-        read -p "Enter your Users Notify Thread ID (optional): " -r TELEGRAM_NOTIFY_USERS_THREAD_ID
-        read -p "Enter your Nodes Notify Thread ID (optional): " -r TELEGRAM_NOTIFY_NODES_THREAD_ID
-        if [[ -z "$TELEGRAM_NOTIFY_NODES_THREAD_ID" ]]; then
-            TELEGRAM_NOTIFY_NODES_THREAD_ID="$TELEGRAM_NOTIFY_USERS_THREAD_ID"
+        read -p "Enter TELEGRAM_NOTIFY_CRM (default: same as NODES): " -r TELEGRAM_NOTIFY_CRM
+        if [[ -z "$TELEGRAM_NOTIFY_CRM" ]]; then
+            TELEGRAM_NOTIFY_CRM="$TELEGRAM_NOTIFY_NODES"
         fi
-        
-        # CRM Notification settings
-        read -p "Enter your CRM Notify Chat ID (default: same as Nodes Notify Chat ID): " -r TELEGRAM_NOTIFY_CRM_CHAT_ID
-        if [[ -z "$TELEGRAM_NOTIFY_CRM_CHAT_ID" ]]; then
-            TELEGRAM_NOTIFY_CRM_CHAT_ID="$TELEGRAM_NOTIFY_NODES_CHAT_ID"
-        fi
-        read -p "Enter your CRM Notify Thread ID (default: same as Nodes Notify Thread ID): " -r TELEGRAM_NOTIFY_CRM_THREAD_ID
-        if [[ -z "$TELEGRAM_NOTIFY_CRM_THREAD_ID" ]]; then
-            TELEGRAM_NOTIFY_CRM_THREAD_ID="$TELEGRAM_NOTIFY_NODES_THREAD_ID"
-        fi
+        # SERVICE and TBLOCKER are left empty - user can configure later if needed
     fi
+
+    # Ask about PANEL_DOMAIN (optional)
+    read -p "Enter PANEL_DOMAIN (optional, e.g., panel.example.com): " -r PANEL_DOMAIN
 
     # Determine image tag based on --dev flag
     BACKEND_IMAGE_TAG="latest"
@@ -9401,19 +9490,21 @@ SHORT_UUID_LENGTH=25
 ### TELEGRAM NOTIFICATIONS ###
 IS_TELEGRAM_NOTIFICATIONS_ENABLED=$IS_TELEGRAM_NOTIFICATIONS_ENABLED
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
-TELEGRAM_NOTIFY_USERS_CHAT_ID=$TELEGRAM_NOTIFY_USERS_CHAT_ID
-TELEGRAM_NOTIFY_NODES_CHAT_ID=$TELEGRAM_NOTIFY_NODES_CHAT_ID
-TELEGRAM_NOTIFY_CRM_CHAT_ID=$TELEGRAM_NOTIFY_CRM_CHAT_ID
-
-# Optional
-# Only set if you want to use topics
-TELEGRAM_NOTIFY_USERS_THREAD_ID=$TELEGRAM_NOTIFY_USERS_THREAD_ID
-TELEGRAM_NOTIFY_NODES_THREAD_ID=$TELEGRAM_NOTIFY_NODES_THREAD_ID
-TELEGRAM_NOTIFY_CRM_THREAD_ID=$TELEGRAM_NOTIFY_CRM_THREAD_ID
+# Format: chat_id or chat_id:thread_id (thread_id is optional for topics)
+TELEGRAM_NOTIFY_USERS=$TELEGRAM_NOTIFY_USERS
+TELEGRAM_NOTIFY_NODES=$TELEGRAM_NOTIFY_NODES
+TELEGRAM_NOTIFY_CRM=$TELEGRAM_NOTIFY_CRM
+TELEGRAM_NOTIFY_SERVICE=$TELEGRAM_NOTIFY_SERVICE
+TELEGRAM_NOTIFY_TBLOCKER=$TELEGRAM_NOTIFY_TBLOCKER
 
 ### FRONT_END ###
 # Used by CORS, you can leave it as * or place your domain there
 FRONT_END_DOMAIN=$FRONT_END_DOMAIN
+
+### PANEL ###
+# Used for generating direct links (e.g., in Telegram notifications with inline buttons)
+# Example: panel.example.com
+PANEL_DOMAIN=$PANEL_DOMAIN
 
 ### SUBSCRIPTION PUBLIC DOMAIN ###
 ### DOMAIN, WITHOUT HTTP/HTTPS, DO NOT ADD / AT THE END ###
@@ -12079,13 +12170,19 @@ update_command() {
     if check_deprecated_env_variables; then
         has_deprecated_vars=true
     fi
-    
+
+    # Проверяем необходимость миграции Telegram v2.7.0
+    local has_telegram_v270_migration=false
+    if check_telegram_notify_v270_migration_needed; then
+        has_telegram_v270_migration=true
+    fi
+
     # Если нет обновлений образов
     if [ "$images_need_update" = false ]; then
         echo
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
         echo -e "\033[1;32m🎉 All images are already up to date!\033[0m"
-        
+
         # Проверяем .env на устаревшие переменные
         if [ "$has_deprecated_vars" = true ]; then
             echo
@@ -12095,7 +12192,17 @@ update_command() {
                 migrate_deprecated_env_variables
             fi
         fi
-        
+
+        # Проверяем необходимость миграции Telegram v2.7.0
+        if [ "$has_telegram_v270_migration" = true ]; then
+            echo
+            echo -e "\033[1;33m⚠️  Telegram notification format needs migration to v2.7.0\033[0m"
+            read -p "Would you like to migrate now? (y/n): " -r migrate_telegram
+            if [[ $migrate_telegram =~ ^[Yy]$ ]]; then
+                migrate_telegram_notify_v270
+            fi
+        fi
+
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
         exit 0
     fi
@@ -12121,9 +12228,17 @@ update_command() {
     
     # === ШАГ 5: Миграция переменных окружения ===
     echo -e "\033[38;5;250m📝 Step 5:\033[0m Checking environment configuration..."
+    local env_migrated=false
     if [ "$has_deprecated_vars" = true ]; then
         migrate_deprecated_env_variables
-    else
+        env_migrated=true
+    fi
+    # v2.7.0 Telegram notification format migration
+    if check_telegram_notify_v270_migration_needed; then
+        migrate_telegram_notify_v270
+        env_migrated=true
+    fi
+    if [ "$env_migrated" = false ]; then
         echo -e "\033[38;5;244m   Environment is clean\033[0m"
     fi
     
