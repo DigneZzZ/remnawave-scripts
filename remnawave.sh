@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.6
+# VERSION=5.8.7
 
-SCRIPT_VERSION="5.8.6"
+SCRIPT_VERSION="5.8.7"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
