@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Version: 4.3.1
 set -e
-SCRIPT_VERSION="4.3.1"
+SCRIPT_VERSION="4.3.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
