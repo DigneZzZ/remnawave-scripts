@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.3.1
+# Version: 4.3.3
 set -e
-SCRIPT_VERSION="4.3.2"
+SCRIPT_VERSION="4.3.3"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -685,17 +685,24 @@ EOL
         
 
         if grep -q "^${escaped_service_indent}volumes:" "$COMPOSE_FILE"; then
-            if ! grep -q "$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
+            # Check for UNCOMMENTED volume line (not starting with #)
+            if grep -qE "^[[:space:]]*-[[:space:]]*${LOG_DIR}:${LOG_DIR}" "$COMPOSE_FILE"; then
+                colorized_echo yellow "Logs volume already exists in volumes section"
+            # Check for COMMENTED volume line and uncomment it
+            elif grep -qE "^[[:space:]]*#[[:space:]]*-[[:space:]]*${LOG_DIR}:${LOG_DIR}" "$COMPOSE_FILE"; then
+                sed -i "s|^\\([[:space:]]*\\)#[[:space:]]*\\(-[[:space:]]*${LOG_DIR}:${LOG_DIR}\\)|\\1\\2|g" "$COMPOSE_FILE"
+                colorized_echo green "Uncommented logs volume line"
+            else
                 sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
                 colorized_echo green "Added logs volume to existing volumes section"
-            else
-                colorized_echo yellow "Logs volume already exists in volumes section"
             fi
         elif grep -q "^${escaped_service_indent}# volumes:" "$COMPOSE_FILE"; then
+            # Uncomment the volumes: key
             sed -i "s|^${escaped_service_indent}# volumes:|${service_indent}volumes:|g" "$COMPOSE_FILE"
 
-            if grep -q "^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"; then
-                sed -i "s|^${escaped_volume_item_indent}#.*$LOG_DIR:$LOG_DIR|${volume_item_indent}- $LOG_DIR:$LOG_DIR|g" "$COMPOSE_FILE"
+            # Check for commented LOG_DIR line with flexible whitespace matching
+            if grep -qE "^[[:space:]]*#[[:space:]]*-[[:space:]]*${LOG_DIR}:${LOG_DIR}" "$COMPOSE_FILE"; then
+                sed -i "s|^\\([[:space:]]*\\)#[[:space:]]*\\(-[[:space:]]*${LOG_DIR}:${LOG_DIR}\\)|\\1\\2|g" "$COMPOSE_FILE"
                 colorized_echo green "Uncommented volumes section and logs volume line"
             else
                 sed -i "/^${escaped_service_indent}volumes:/a\\${volume_item_indent}- $LOG_DIR:$LOG_DIR" "$COMPOSE_FILE"
@@ -1124,13 +1131,14 @@ EOL
 EOL
     else
         # If Xray is not installed, add commented volumes section
+        # Use same indentation format as when Xray is installed for consistency
         cat >> "$COMPOSE_FILE" <<EOL
     # volumes:
-    #   - $XRAY_FILE:/usr/local/bin/xray
-    #   - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
-    #   - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
-    #   - $LOG_DIR:$LOG_DIR
-    #   - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
+      # - $XRAY_FILE:/usr/local/bin/xray
+      # - $GEOIP_FILE:/usr/local/share/xray/geoip.dat
+      # - $GEOSITE_FILE:/usr/local/share/xray/geosite.dat
+      # - $LOG_DIR:$LOG_DIR
+      # - /dev/shm:/dev/shm  # Uncomment for selfsteal socket access
 EOL
     fi
 
