@@ -4395,7 +4395,7 @@ main_menu() {
                 if [ "$xray_version" = "Not installed" ]; then
                     echo -e "\033[1;34m💡 Tip: Install Xray-core with option 11 for better performance\033[0m"
                 else
-                    echo -e "\033[1;34m💡 Tip: Check logs (7-9) or configure log rotation (14)\033[0m"
+                    echo -e "\033[1;34m💡 Tip: Check logs (7-9) or configure log rotation (16)\033[0m"
                 fi
                 ;;
         esac
