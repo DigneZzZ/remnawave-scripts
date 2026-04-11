@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.7
+# VERSION=5.8.8
 
-SCRIPT_VERSION="5.8.7"
+SCRIPT_VERSION="5.8.8"
 BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -551,9 +551,9 @@ migrate_telegram_notify_v270() {
 
     # Добавляем новые переменные после TELEGRAM_BOT_TOKEN
     sed -i "/^TELEGRAM_BOT_TOKEN=/a\\
-TELEGRAM_NOTIFY_USERS=$users_new\\
-TELEGRAM_NOTIFY_NODES=$nodes_new\\
-TELEGRAM_NOTIFY_CRM=$crm_new\\
+TELEGRAM_NOTIFY_USERS=\"$users_new\"\\
+TELEGRAM_NOTIFY_NODES=\"$nodes_new\"\\
+TELEGRAM_NOTIFY_CRM=\"$crm_new\"\\
 TELEGRAM_NOTIFY_SERVICE=\\
 TELEGRAM_NOTIFY_TBLOCKER=" "$ENV_FILE"
 
@@ -593,6 +593,60 @@ check_telegram_notify_v270_migration_needed() {
     if grep -q "^TELEGRAM_NOTIFY_USERS_CHAT_ID=" "$ENV_FILE" 2>/dev/null; then
         return 0  # Migration needed
     fi
+
+    return 1  # No migration needed
+}
+
+migrate_telegram_notify_quotes() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 0
+    fi
+
+    local needs_fix=false
+    local notify_vars=(TELEGRAM_NOTIFY_USERS TELEGRAM_NOTIFY_NODES TELEGRAM_NOTIFY_CRM TELEGRAM_NOTIFY_SERVICE TELEGRAM_NOTIFY_TBLOCKER)
+
+    for var in "${notify_vars[@]}"; do
+        # Match lines like VAR=value where value is non-empty and not already quoted
+        if grep -qE "^${var}=[^\"]" "$ENV_FILE" 2>/dev/null; then
+            needs_fix=true
+            break
+        fi
+    done
+
+    if [ "$needs_fix" = false ]; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🔄 Fixing TELEGRAM_NOTIFY quotes in .env\033[0m"
+
+    local backup_file="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    for var in "${notify_vars[@]}"; do
+        if grep -qE "^${var}=[^\"]" "$ENV_FILE" 2>/dev/null; then
+            local val
+            val=$(grep "^${var}=" "$ENV_FILE" | cut -d'=' -f2-)
+            sed -i "s|^${var}=.*|${var}=\"${val}\"|" "$ENV_FILE"
+            echo -e "\033[38;5;244m  ✓ Quoted: ${var}\033[0m"
+        fi
+    done
+
+    echo -e "\033[1;32m🎉 Quotes migration completed!\033[0m"
+}
+
+check_telegram_notify_quotes_migration_needed() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 1
+    fi
+
+    local notify_vars=(TELEGRAM_NOTIFY_USERS TELEGRAM_NOTIFY_NODES TELEGRAM_NOTIFY_CRM TELEGRAM_NOTIFY_SERVICE TELEGRAM_NOTIFY_TBLOCKER)
+    for var in "${notify_vars[@]}"; do
+        if grep -qE "^${var}=[^\"]" "$ENV_FILE" 2>/dev/null; then
+            return 0  # Migration needed
+        fi
+    done
 
     return 1  # No migration needed
 }
@@ -9491,11 +9545,11 @@ SHORT_UUID_LENGTH=25
 IS_TELEGRAM_NOTIFICATIONS_ENABLED=$IS_TELEGRAM_NOTIFICATIONS_ENABLED
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 # Format: chat_id or chat_id:thread_id (thread_id is optional for topics)
-TELEGRAM_NOTIFY_USERS=$TELEGRAM_NOTIFY_USERS
-TELEGRAM_NOTIFY_NODES=$TELEGRAM_NOTIFY_NODES
-TELEGRAM_NOTIFY_CRM=$TELEGRAM_NOTIFY_CRM
-TELEGRAM_NOTIFY_SERVICE=$TELEGRAM_NOTIFY_SERVICE
-TELEGRAM_NOTIFY_TBLOCKER=$TELEGRAM_NOTIFY_TBLOCKER
+TELEGRAM_NOTIFY_USERS="$TELEGRAM_NOTIFY_USERS"
+TELEGRAM_NOTIFY_NODES="$TELEGRAM_NOTIFY_NODES"
+TELEGRAM_NOTIFY_CRM="$TELEGRAM_NOTIFY_CRM"
+TELEGRAM_NOTIFY_SERVICE="$TELEGRAM_NOTIFY_SERVICE"
+TELEGRAM_NOTIFY_TBLOCKER="$TELEGRAM_NOTIFY_TBLOCKER"
 
 ### FRONT_END ###
 # Used by CORS, you can leave it as * or place your domain there
@@ -12177,6 +12231,12 @@ update_command() {
         has_telegram_v270_migration=true
     fi
 
+    # Проверяем необходимость миграции кавычек Telegram
+    local has_telegram_quotes_migration=false
+    if check_telegram_notify_quotes_migration_needed; then
+        has_telegram_quotes_migration=true
+    fi
+
     # Если нет обновлений образов
     if [ "$images_need_update" = false ]; then
         echo
@@ -12201,6 +12261,11 @@ update_command() {
             if [[ $migrate_telegram =~ ^[Yy]$ ]]; then
                 migrate_telegram_notify_v270
             fi
+        fi
+
+        # Проверяем необходимость миграции кавычек
+        if [ "$has_telegram_quotes_migration" = true ]; then
+            migrate_telegram_notify_quotes
         fi
 
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
@@ -12236,6 +12301,11 @@ update_command() {
     # v2.7.0 Telegram notification format migration
     if check_telegram_notify_v270_migration_needed; then
         migrate_telegram_notify_v270
+        env_migrated=true
+    fi
+    # Fix unquoted TELEGRAM_NOTIFY values
+    if check_telegram_notify_quotes_migration_needed; then
+        migrate_telegram_notify_quotes
         env_migrated=true
     fi
     if [ "$env_migrated" = false ]; then
