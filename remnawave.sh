@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.1.3
+# VERSION=6.1.4
 
-SCRIPT_VERSION="6.1.3"
+SCRIPT_VERSION="6.1.4"
 BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -803,6 +803,16 @@ migrate_compose_v588() {
     redis_image_line=$(grep -n "image:.*valkey" "$COMPOSE_FILE" | head -1 | cut -d: -f1)
 
     if [ -n "$redis_image_line" ]; then
+        # Detect indentation from existing compose (spaces before "image:" in redis section)
+        local image_line_content
+        image_line_content=$(sed -n "${redis_image_line}p" "$COMPOSE_FILE")
+        local indent=""
+        indent=$(echo "$image_line_content" | sed 's/\(^[[:space:]]*\).*/\1/')
+        # indent = service property level (e.g. "      " for 2-space or "        " for 4-space)
+        local indent_len=${#indent}
+        local sub_indent=""
+        sub_indent=$(printf '%*s' "$((indent_len + 4))" '')
+
         # Find healthcheck line in redis section
         local hc_offset
         hc_offset=$(tail -n "+${redis_image_line}" "$COMPOSE_FILE" | grep -n "healthcheck:" | head -1 | cut -d: -f1)
@@ -816,9 +826,13 @@ migrate_compose_v588() {
             if [ -n "$cmd_offset" ]; then
                 local cmd_abs=$((redis_image_line + cmd_offset - 1))
                 # Count continuation lines (indented deeper than command:)
+                local cmd_indent_len
+                cmd_indent_len=$(sed -n "${cmd_abs}p" "$COMPOSE_FILE" | sed 's/[^ ].*//' | wc -c)
                 local continuation_count=0
                 while IFS= read -r cl; do
-                    if [[ "$cl" =~ ^[[:space:]]{12} ]]; then
+                    local cl_indent_len
+                    cl_indent_len=$(echo "$cl" | sed 's/[^ ].*//' | wc -c)
+                    if [ "$cl_indent_len" -gt "$cmd_indent_len" ]; then
                         continuation_count=$((continuation_count + 1))
                     else
                         break
@@ -831,20 +845,20 @@ migrate_compose_v588() {
                 hc_abs=$((redis_image_line + hc_offset - 1))
             fi
 
-            # Insert new command block before healthcheck
+            # Insert new command block before healthcheck using detected indentation
             local cmd_block
             cmd_block=$(mktemp)
-            cat > "$cmd_block" << 'CMDBLOCK'
-        command: >
-            valkey-server
-            --save ""
-            --appendonly no
-            --maxmemory-policy noeviction
-            --loglevel warning
-            --unixsocket /var/run/valkey/valkey.sock
-            --unixsocketperm 777
-            --port 0
-CMDBLOCK
+            {
+                echo "${indent}command: >"
+                echo "${sub_indent}valkey-server"
+                echo "${sub_indent}--save \"\""
+                echo "${sub_indent}--appendonly no"
+                echo "${sub_indent}--maxmemory-policy noeviction"
+                echo "${sub_indent}--loglevel warning"
+                echo "${sub_indent}--unixsocket /var/run/valkey/valkey.sock"
+                echo "${sub_indent}--unixsocketperm 777"
+                echo "${sub_indent}--port 0"
+            } > "$cmd_block"
             sed -i "$((hc_abs - 1))r ${cmd_block}" "$COMPOSE_FILE"
             rm -f "$cmd_block"
             echo -e "\033[38;5;244m  ✓ Updated Redis command for socket\033[0m"
@@ -855,7 +869,7 @@ CMDBLOCK
             test_offset=$(tail -n "+${redis_image_line}" "$COMPOSE_FILE" | grep -n "test:.*ping" | head -1 | cut -d: -f1)
             if [ -n "$test_offset" ]; then
                 local test_abs=$((redis_image_line + test_offset - 1))
-                sed -i "${test_abs}s|.*test:.*|            test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']|" "$COMPOSE_FILE"
+                sed -i "${test_abs}s|.*test:.*|${sub_indent}test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']|" "$COMPOSE_FILE"
             fi
             echo -e "\033[38;5;244m  ✓ Updated Redis healthcheck for socket\033[0m"
         fi
