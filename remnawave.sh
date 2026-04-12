@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.1.1
+# VERSION=6.1.2
 
-SCRIPT_VERSION="6.1.1"
+SCRIPT_VERSION="6.1.2"
 BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9723,8 +9723,48 @@ install_remnawave() {
     TELEGRAM_NOTIFY_SERVICE=""
     TELEGRAM_NOTIFY_TBLOCKER=""
 
+    TELEGRAM_BOT_PROXY=""
+
     if [[ "$enable_telegram" =~ ^[Yy]$ ]]; then
         IS_TELEGRAM_NOTIFICATIONS_ENABLED=true
+
+        # Check Telegram API availability
+        colorized_echo blue "Checking Telegram API availability..."
+        local tg_api_available=false
+        if curl -s --connect-timeout 5 --max-time 10 "https://api.telegram.org" >/dev/null 2>&1; then
+            tg_api_available=true
+            colorized_echo green "✅ Telegram API is reachable"
+        else
+            colorized_echo yellow "⚠️  Telegram API (api.telegram.org) is not reachable from this server"
+            echo ""
+            colorized_echo yellow "You can configure a proxy to access Telegram API."
+            echo "Format: protocol://user:password@host:port"
+            echo "Example: socks5://proxy:1080 or http://user:pass@proxy:8080"
+            echo ""
+            read -p "Enter Telegram proxy (or press Enter to skip): " -r TELEGRAM_BOT_PROXY
+
+            if [[ -n "$TELEGRAM_BOT_PROXY" ]]; then
+                # Verify proxy works
+                colorized_echo blue "Checking Telegram API via proxy..."
+                if curl -s --connect-timeout 5 --max-time 10 --proxy "$TELEGRAM_BOT_PROXY" "https://api.telegram.org" >/dev/null 2>&1; then
+                    tg_api_available=true
+                    colorized_echo green "✅ Telegram API is reachable via proxy"
+                else
+                    colorized_echo red "❌ Telegram API is still not reachable via proxy"
+                    TELEGRAM_BOT_PROXY=""
+                fi
+            fi
+
+            if [[ "$tg_api_available" == "false" ]]; then
+                colorized_echo red "❌ Telegram API is not accessible. Disabling Telegram notifications."
+                colorized_echo yellow "You can enable them later by editing .env and setting IS_TELEGRAM_NOTIFICATIONS_ENABLED=true"
+                colorized_echo yellow "and configuring TELEGRAM_BOT_PROXY if needed."
+                IS_TELEGRAM_NOTIFICATIONS_ENABLED=false
+                echo ""
+                colorized_echo blue "We'll still save your Telegram settings so you can enable notifications later."
+            fi
+        fi
+
         read -p "Enter your Telegram Bot Token: " -r TELEGRAM_BOT_TOKEN
         echo "Format: chat_id or chat_id:thread_id (thread_id is optional for topics)"
         read -p "Enter TELEGRAM_NOTIFY_USERS: " -r TELEGRAM_NOTIFY_USERS
@@ -9780,7 +9820,16 @@ IS_TELEGRAM_NOTIFICATIONS_ENABLED=$IS_TELEGRAM_NOTIFICATIONS_ENABLED
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 # is optional, only if you want to use proxy
 # FORMAT: protocol://user:password@host:port, example: socks5://proxy:1080
-# TELEGRAM_BOT_PROXY=change_me
+EOL
+
+    # Write TELEGRAM_BOT_PROXY: active if set, commented placeholder otherwise
+    if [[ -n "$TELEGRAM_BOT_PROXY" ]]; then
+        echo "TELEGRAM_BOT_PROXY=$TELEGRAM_BOT_PROXY" >> "$ENV_FILE"
+    else
+        echo "# TELEGRAM_BOT_PROXY=change_me" >> "$ENV_FILE"
+    fi
+
+    cat >> "$ENV_FILE" <<EOL
 
 ### TELEGRAM CHAT IDs in format: "chat_id:thread_id"
 # thread_id is optional, only if you want to use topics
