@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=5.8.8
+# VERSION=6.1.1
 
-SCRIPT_VERSION="5.8.8"
-BACKUP_SCRIPT_VERSION="1.3.0"  # Версия backup скрипта создаваемого Schedule функцией
+SCRIPT_VERSION="6.1.1"
+BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
     shift  
@@ -554,8 +554,8 @@ migrate_telegram_notify_v270() {
 TELEGRAM_NOTIFY_USERS=\"$users_new\"\\
 TELEGRAM_NOTIFY_NODES=\"$nodes_new\"\\
 TELEGRAM_NOTIFY_CRM=\"$crm_new\"\\
-TELEGRAM_NOTIFY_SERVICE=\\
-TELEGRAM_NOTIFY_TBLOCKER=" "$ENV_FILE"
+TELEGRAM_NOTIFY_SERVICE=\"\"\\
+TELEGRAM_NOTIFY_TBLOCKER=\"\"" "$ENV_FILE"
 
     # Добавляем PANEL_DOMAIN если отсутствует
     if ! grep -q "^PANEL_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
@@ -651,6 +651,210 @@ check_telegram_notify_quotes_migration_needed() {
     return 1  # No migration needed
 }
 
+migrate_env_v588() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 0
+    fi
+
+    local needs_migration=false
+
+    # Check for SHORT_UUID_LENGTH (removed upstream)
+    if grep -q "^SHORT_UUID_LENGTH=" "$ENV_FILE" 2>/dev/null; then
+        needs_migration=true
+    fi
+
+    # Check for old Redis TCP config (should be socket now)
+    if grep -q "^REDIS_HOST=" "$ENV_FILE" 2>/dev/null && ! grep -q "^REDIS_SOCKET=" "$ENV_FILE" 2>/dev/null; then
+        needs_migration=true
+    fi
+
+    if [ "$needs_migration" = false ]; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🔄 Migrating .env to v5.8.8 format\033[0m"
+
+    local backup_file="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    # Remove SHORT_UUID_LENGTH
+    if grep -q "^SHORT_UUID_LENGTH=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "/^SHORT_UUID_LENGTH=/d" "$ENV_FILE"
+        echo -e "\033[38;5;244m  ✓ Removed: SHORT_UUID_LENGTH (no longer used)\033[0m"
+    fi
+
+    # Migrate Redis from TCP to Unix socket
+    if grep -q "^REDIS_HOST=" "$ENV_FILE" 2>/dev/null && ! grep -q "^REDIS_SOCKET=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "/^REDIS_HOST=/d" "$ENV_FILE"
+        sed -i "/^REDIS_PORT=/d" "$ENV_FILE"
+        # Find the ### REDIS ### section or add after DATABASE_URL
+        if grep -q "^### REDIS" "$ENV_FILE" 2>/dev/null; then
+            sed -i "/^### REDIS/a\\
+REDIS_SOCKET=/var/run/valkey/valkey.sock\\
+# Alternative to REDIS_SOCKET\\
+#REDIS_HOST=\\
+#REDIS_PORT=" "$ENV_FILE"
+        elif grep -q "^DATABASE_URL=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "/^DATABASE_URL=/a\\
+\\
+### REDIS ###\\
+REDIS_SOCKET=/var/run/valkey/valkey.sock\\
+# Alternative to REDIS_SOCKET\\
+#REDIS_HOST=\\
+#REDIS_PORT=" "$ENV_FILE"
+        else
+            echo "" >> "$ENV_FILE"
+            echo "### REDIS ###" >> "$ENV_FILE"
+            echo "REDIS_SOCKET=/var/run/valkey/valkey.sock" >> "$ENV_FILE"
+            echo "# Alternative to REDIS_SOCKET" >> "$ENV_FILE"
+            echo "#REDIS_HOST=" >> "$ENV_FILE"
+            echo "#REDIS_PORT=" >> "$ENV_FILE"
+        fi
+        echo -e "\033[38;5;244m  ✓ Migrated Redis from TCP to Unix socket\033[0m"
+    fi
+
+    echo -e "\033[1;32m🎉 v5.8.8 migration completed!\033[0m"
+}
+
+check_env_v588_migration_needed() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 1
+    fi
+
+    # SHORT_UUID_LENGTH exists
+    if grep -q "^SHORT_UUID_LENGTH=" "$ENV_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    # Old Redis TCP config without socket
+    if grep -q "^REDIS_HOST=" "$ENV_FILE" 2>/dev/null && ! grep -q "^REDIS_SOCKET=" "$ENV_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+migrate_compose_v588() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        return 0
+    fi
+
+    local needs_migration=false
+
+    # Check for old valkey version
+    if grep -q "valkey/valkey:8" "$COMPOSE_FILE" 2>/dev/null; then
+        needs_migration=true
+    fi
+
+    # Check if backend is missing valkey-socket volume
+    if ! grep -q "valkey-socket:/var/run/valkey" "$COMPOSE_FILE" 2>/dev/null; then
+        needs_migration=true
+    fi
+
+    if [ "$needs_migration" = false ]; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🔄 Migrating docker-compose.yml to v5.8.8 format\033[0m"
+    echo -e "\033[38;5;244m   Upgrading Valkey to v9 with Unix socket\033[0m"
+
+    local backup_file="${COMPOSE_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$COMPOSE_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    # Determine container name prefix from compose file
+    local redis_container_name
+    redis_container_name=$(grep -oP "container_name:\s*['\"]?\K[^'\"]*-redis" "$COMPOSE_FILE" | head -1)
+    local app_prefix="${redis_container_name%-redis}"
+    if [ -z "$app_prefix" ]; then
+        app_prefix="remnawave"
+    fi
+
+    # Update valkey image version
+    sed -i "s|valkey/valkey:8[.0-9]*-alpine|valkey/valkey:9-alpine|g" "$COMPOSE_FILE"
+    echo -e "\033[38;5;244m  ✓ Updated Valkey image to 9-alpine\033[0m"
+
+    # Replace redis volumes section with valkey-socket
+    # Old: ${APP_NAME}-redis-data:/data
+    sed -i "s|${app_prefix}-redis-data:/data|valkey-socket:/var/run/valkey|g" "$COMPOSE_FILE"
+
+    # Add valkey-socket volume to backend service if missing
+    if ! grep -A5 "image: remnawave/backend" "$COMPOSE_FILE" | grep -q "valkey-socket"; then
+        # Add volumes section with valkey-socket after <<: [*common, *logging, *env]
+        sed -i "/image: remnawave\/backend/,/ports:/{
+            /<<: \[.*env\]/a\\
+        volumes:\\
+            - valkey-socket:/var/run/valkey
+        }" "$COMPOSE_FILE"
+        echo -e "\033[38;5;244m  ✓ Added valkey-socket volume to backend\033[0m"
+    fi
+
+    # Replace redis command with socket-based config
+    # Find the command block under redis service and replace
+    local temp_file=$(mktemp)
+    local in_redis_command=false
+    local command_done=false
+    while IFS= read -r line; do
+        if [[ "$line" =~ "command:" ]] && [ "$command_done" = false ] && grep -q "valkey-server" "$COMPOSE_FILE"; then
+            # Check if we're in the redis service section
+            if [ "$in_redis_command" = false ]; then
+                in_redis_command=true
+                echo "        command: >" >> "$temp_file"
+                echo "            valkey-server" >> "$temp_file"
+                echo "            --save \"\"" >> "$temp_file"
+                echo "            --appendonly no" >> "$temp_file"
+                echo "            --maxmemory-policy noeviction" >> "$temp_file"
+                echo "            --loglevel warning" >> "$temp_file"
+                echo "            --unixsocket /var/run/valkey/valkey.sock" >> "$temp_file"
+                echo "            --unixsocketperm 777" >> "$temp_file"
+                echo "            --port 0" >> "$temp_file"
+                command_done=true
+                continue
+            fi
+        fi
+        if [ "$in_redis_command" = true ] && [ "$command_done" = true ]; then
+            # Skip old command lines until we hit healthcheck or another section
+            if [[ "$line" =~ ^[[:space:]]*"--" ]] || [[ "$line" =~ ^[[:space:]]*"valkey-server" ]]; then
+                continue
+            fi
+            in_redis_command=false
+        fi
+        echo "$line" >> "$temp_file"
+    done < "$COMPOSE_FILE"
+    mv "$temp_file" "$COMPOSE_FILE"
+
+    # Update healthcheck to use socket
+    sed -i "s|test: \['CMD', 'valkey-cli', 'ping'\]|test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']|g" "$COMPOSE_FILE"
+    echo -e "\033[38;5;244m  ✓ Updated Redis healthcheck for socket\033[0m"
+
+    # Replace old volume definition with valkey-socket
+    sed -i "s|${app_prefix}-redis-data:|valkey-socket:|g" "$COMPOSE_FILE"
+    sed -i "s|name: ${app_prefix}-redis-data|name: valkey-socket|g" "$COMPOSE_FILE"
+
+    echo -e "\033[1;32m🎉 docker-compose.yml migration completed!\033[0m"
+    echo -e "\033[38;5;250m   ⚠️  Old Redis data volume can be removed after verifying everything works:\033[0m"
+    echo -e "\033[38;5;244m   docker volume rm ${app_prefix}-redis-data\033[0m"
+}
+
+check_compose_v588_migration_needed() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        return 1
+    fi
+
+    if grep -q "valkey/valkey:8" "$COMPOSE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    if ! grep -q "valkey-socket:/var/run/valkey" "$COMPOSE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
 # ===== END ENV MIGRATION FUNCTIONS =====
 
 check_backup_script_version() {
@@ -715,6 +919,7 @@ prompt_backup_script_update() {
     echo -e "\033[38;5;250m   ✓ Three backup types: SQL dump, volume, or both\033[0m"
     echo -e "\033[38;5;250m   ✓ Automatic restore scripts included\033[0m"
     echo -e "\033[38;5;250m   ✓ Fixed Telegram file size limits (auto-split large backups)\033[0m"
+    echo -e "\033[38;5;250m   ✓ Telegram proxy support (TELEGRAM_BOT_PROXY from .env)\033[0m"
     echo -e "\033[38;5;250m   ✓ Better error handling and logging\033[0m"
     echo -e "\033[38;5;250m   ✓ Enhanced restore compatibility\033[0m"
     echo
@@ -1306,6 +1511,7 @@ schedule_update_script() {
         echo -e "\033[1;37m🚀 Features in v$BACKUP_SCRIPT_VERSION:\033[0m"
         echo -e "\033[38;5;250m   ✓ Unified backup structure (compatible with manual backups)\033[0m"
         echo -e "\033[38;5;250m   ✓ Improved compression and file handling\033[0m"
+        echo -e "\033[38;5;250m   ✓ Telegram proxy support (TELEGRAM_BOT_PROXY from .env)\033[0m"
         echo -e "\033[38;5;250m   ✓ Better error handling and logging\033[0m"
         echo -e "\033[38;5;250m   ✓ Enhanced restore compatibility\033[0m"
         echo -e "\033[38;5;250m   ✓ Automatic version checking\033[0m"
@@ -2971,7 +3177,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.3.0"
+BACKUP_SCRIPT_VERSION="1.4.0"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -4012,6 +4218,23 @@ if [ "$TELEGRAM_ENABLED" = "true" ];
     telegram_chat_id=$(jq -r '.telegram.chat_id' "$CONFIG_FILE")
     telegram_thread_id=$(jq -r '.telegram.thread_id' "$CONFIG_FILE")
     
+    # Читаем прокси из .env панели (если задан и раскомментирован)
+    telegram_proxy=""
+    if [ -f "$APP_DIR/.env" ]; then
+        telegram_proxy=$(grep "^TELEGRAM_BOT_PROXY=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//;s/"$//' || true)
+        if [ -n "$telegram_proxy" ] && [ "$telegram_proxy" != "change_me" ]; then
+            log_message "Using Telegram proxy: $telegram_proxy"
+        else
+            telegram_proxy=""
+        fi
+    fi
+    
+    # Формируем аргументы прокси для curl
+    curl_proxy_args=""
+    if [ -n "$telegram_proxy" ]; then
+        curl_proxy_args="--proxy $telegram_proxy"
+    fi
+    
     if [ "$telegram_bot_token" != "null" ] && [ "$telegram_chat_id" != "null" ]; then
         # Отправляем информацию о бэкапе
         backup_info="🤖 *Scheduled Backup Created*
@@ -4066,14 +4289,14 @@ ${part_info}"
             
             # Используем обычный Markdown вместо MarkdownV2 для совместимости
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                curl -s -X POST "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
                     -F "parse_mode=Markdown" \
                     -F "message_thread_id=$telegram_thread_id" >/dev/null 2>&1
             else
-                curl -s -X POST "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
@@ -4088,13 +4311,13 @@ ${part_info}"
             local message="$1"
             
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                curl -s -X POST "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
                     -F "message_thread_id=$telegram_thread_id" >/dev/null 2>&1
             else
-                curl -s -X POST "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" >/dev/null 2>&1
@@ -6279,6 +6502,17 @@ schedule_test_telegram() {
     local chat_id=$(jq -r '.telegram.chat_id' "$BACKUP_CONFIG_FILE" 2>/dev/null)
     local thread_id=$(jq -r '.telegram.thread_id' "$BACKUP_CONFIG_FILE" 2>/dev/null)
     
+    # Читаем прокси из .env панели (если задан и раскомментирован)
+    local tg_proxy=""
+    local curl_proxy_args=""
+    if [ -f "$ENV_FILE" ]; then
+        tg_proxy=$(grep "^TELEGRAM_BOT_PROXY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//;s/"$//' || true)
+        if [ -n "$tg_proxy" ] && [ "$tg_proxy" != "change_me" ]; then
+            curl_proxy_args="--proxy $tg_proxy"
+            echo -e "\033[38;5;244mUsing proxy: $tg_proxy\033[0m"
+        fi
+    fi
+    
     echo -e "\033[38;5;250mSending test message...\033[0m"
     
     local api_url="https://api.telegram.org/bot$bot_token"
@@ -6292,7 +6526,7 @@ schedule_test_telegram() {
         params="$params&message_thread_id=$thread_id"
     fi
     
-    local response=$(curl -s -X POST "$api_url/sendMessage" -d "$params")
+    local response=$(curl -s -X POST $curl_proxy_args "$api_url/sendMessage" -d "$params")
     
     if echo "$response" | jq -e '.ok' >/dev/null 2>&1; then
         echo -e "\033[1;32m✅ Test message sent successfully!\033[0m"
@@ -9531,34 +9765,39 @@ API_INSTANCES=1
 DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
 
 ### REDIS ###
-REDIS_HOST=remnawave-redis
-REDIS_PORT=6379
+REDIS_SOCKET=/var/run/valkey/valkey.sock
+# Alternative to REDIS_SOCKET
+#REDIS_HOST=
+#REDIS_PORT=
 
 ### JWT ###
 ### CHANGE DEFAULT VALUES ###
 JWT_AUTH_SECRET=$JWT_AUTH_SECRET
 JWT_API_TOKENS_SECRET=$JWT_API_TOKENS_SECRET
 
-SHORT_UUID_LENGTH=25
-
 ### TELEGRAM NOTIFICATIONS ###
 IS_TELEGRAM_NOTIFICATIONS_ENABLED=$IS_TELEGRAM_NOTIFICATIONS_ENABLED
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
-# Format: chat_id or chat_id:thread_id (thread_id is optional for topics)
+# is optional, only if you want to use proxy
+# FORMAT: protocol://user:password@host:port, example: socks5://proxy:1080
+# TELEGRAM_BOT_PROXY=change_me
+
+### TELEGRAM CHAT IDs in format: "chat_id:thread_id"
+# thread_id is optional, only if you want to use topics
+# example: "-100123:80" - -100123 is chat_id, 80 is thread_id
+# example: "-100123" - -100123 is chat_id, thread_id is not used
 TELEGRAM_NOTIFY_USERS="$TELEGRAM_NOTIFY_USERS"
 TELEGRAM_NOTIFY_NODES="$TELEGRAM_NOTIFY_NODES"
 TELEGRAM_NOTIFY_CRM="$TELEGRAM_NOTIFY_CRM"
 TELEGRAM_NOTIFY_SERVICE="$TELEGRAM_NOTIFY_SERVICE"
 TELEGRAM_NOTIFY_TBLOCKER="$TELEGRAM_NOTIFY_TBLOCKER"
 
+### PANEL DOMAIN ###
+PANEL_DOMAIN=$PANEL_DOMAIN
+
 ### FRONT_END ###
 # Used by CORS, you can leave it as * or place your domain there
 FRONT_END_DOMAIN=$FRONT_END_DOMAIN
-
-### PANEL ###
-# Used for generating direct links (e.g., in Telegram notifications with inline buttons)
-# Example: panel.example.com
-PANEL_DOMAIN=$PANEL_DOMAIN
 
 ### SUBSCRIPTION PUBLIC DOMAIN ###
 ### DOMAIN, WITHOUT HTTP/HTTPS, DO NOT ADD / AT THE END ###
@@ -9578,12 +9817,13 @@ IS_DOCS_ENABLED=false
 METRICS_USER=$METRICS_USER
 METRICS_PASS=$METRICS_PASS
 
-### WEBHOOK ###
+# Webhook configuration
+# Enable webhook notifications (true/false, defaults to false if not set or empty)
 WEBHOOK_ENABLED=false
-### Only https:// is allowed
-WEBHOOK_URL=https://webhook.site/1234567890
+# Webhook URL to send notifications to (can specify multiple URLs separated by commas if needed)
+# Only http:// or https:// are allowed.
+WEBHOOK_URL=https://your-webhook-url.com/endpoint
 ### This secret is used to sign the webhook payload, must be exact 64 characters. Only a-z, 0-9, A-Z are allowed.
-### Generated automatically during installation on $(date '+%Y-%m-%d %H:%M:%S')
 WEBHOOK_SECRET_HEADER=$WEBHOOK_SECRET_HEADER
 
 
@@ -9684,6 +9924,8 @@ services:
         container_name: '${APP_NAME}'
         hostname: ${APP_NAME}
         <<: [*common, *logging, *env]
+        volumes:
+            - valkey-socket:/var/run/valkey
         ports:
             - '127.0.0.1:${APP_PORT}:\${APP_PORT:-3000}'
             - '127.0.0.1:${METRICS_PORT}:\${METRICS_PORT:-3001}'
@@ -9714,20 +9956,23 @@ services:
                 condition: service_healthy
 
     remnawave-redis:
-        image: valkey/valkey:8.1-alpine
+        image: valkey/valkey:9-alpine
         container_name: ${APP_NAME}-redis
         hostname: ${APP_NAME}-redis
         <<: [*common, *logging]
         volumes:
-            - ${APP_NAME}-redis-data:/data
+            - valkey-socket:/var/run/valkey
         command: >
             valkey-server
             --save ""
             --appendonly no
             --maxmemory-policy noeviction
             --loglevel warning
+            --unixsocket /var/run/valkey/valkey.sock
+            --unixsocketperm 777
+            --port 0
         healthcheck:
-            test: ['CMD', 'valkey-cli', 'ping']
+            test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']
             interval: 3s
             timeout: 3s
             retries: 3
@@ -9744,10 +9989,10 @@ volumes:
         driver: local
         external: false
         name: ${APP_NAME}-db-data
-    ${APP_NAME}-redis-data:
-      driver: local
-      external: false
-      name: ${APP_NAME}-redis-data
+    valkey-socket:
+        name: valkey-socket
+        driver: local
+        external: false
 EOL
     colorized_echo green "Docker Compose file saved in $COMPOSE_FILE"
 }
@@ -12237,6 +12482,17 @@ update_command() {
         has_telegram_quotes_migration=true
     fi
 
+    # Проверяем необходимость миграции v5.8.8 (Redis socket, SHORT_UUID_LENGTH)
+    local has_env_v588_migration=false
+    if check_env_v588_migration_needed; then
+        has_env_v588_migration=true
+    fi
+
+    local has_compose_v588_migration=false
+    if check_compose_v588_migration_needed; then
+        has_compose_v588_migration=true
+    fi
+
     # Если нет обновлений образов
     if [ "$images_need_update" = false ]; then
         echo
@@ -12266,6 +12522,14 @@ update_command() {
         # Проверяем необходимость миграции кавычек
         if [ "$has_telegram_quotes_migration" = true ]; then
             migrate_telegram_notify_quotes
+        fi
+
+        # v5.8.8 миграция .env и docker-compose
+        if [ "$has_env_v588_migration" = true ]; then
+            migrate_env_v588
+        fi
+        if [ "$has_compose_v588_migration" = true ]; then
+            migrate_compose_v588
         fi
 
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
@@ -12306,6 +12570,16 @@ update_command() {
     # Fix unquoted TELEGRAM_NOTIFY values
     if check_telegram_notify_quotes_migration_needed; then
         migrate_telegram_notify_quotes
+        env_migrated=true
+    fi
+    # v5.8.8 .env migration (Redis socket, SHORT_UUID_LENGTH)
+    if check_env_v588_migration_needed; then
+        migrate_env_v588
+        env_migrated=true
+    fi
+    # v5.8.8 docker-compose migration (Valkey 9, socket)
+    if check_compose_v588_migration_needed; then
+        migrate_compose_v588
         env_migrated=true
     fi
     if [ "$env_migrated" = false ]; then

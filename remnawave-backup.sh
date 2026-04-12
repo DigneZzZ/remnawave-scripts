@@ -118,12 +118,25 @@ if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
 fi
 
 BACKUP_SCRIPT="$COMPOSE_PATH/backup.sh"
+
+# Читаем прокси из .env панели (если задан и раскомментирован)
+TELEGRAM_BOT_PROXY=""
+if [ -f "$COMPOSE_PATH/.env" ]; then
+    TELEGRAM_BOT_PROXY=$(grep "^TELEGRAM_BOT_PROXY=" "$COMPOSE_PATH/.env" | cut -d'=' -f2- | sed 's/^"//;s/"$//')
+    if [ -n "$TELEGRAM_BOT_PROXY" ] && [ "$TELEGRAM_BOT_PROXY" != "change_me" ]; then
+        echo -e "${GREEN}✔ Found Telegram proxy in .env: $TELEGRAM_BOT_PROXY${NC}"
+    else
+        TELEGRAM_BOT_PROXY=""
+    fi
+fi
+
 cat << EOF > "$BACKUP_SCRIPT"
 #!/bin/bash
 cd "$COMPOSE_PATH" || { echo "Error: Could not change to $COMPOSE_PATH"; exit 1; }
 TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
 TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
 TELEGRAM_TOPIC_ID="$TELEGRAM_TOPIC_ID"
+TELEGRAM_BOT_PROXY="$TELEGRAM_BOT_PROXY"
 BACKUP_DIR="/tmp/backup_\$(date +%Y%m%d_%H%M%S)"
 BACKUP_DATE="\$(date '+%Y-%m-%d %H:%M:%S UTC')"
 ARCHIVE_NAME="\$BACKUP_DIR.tar.gz"
@@ -187,9 +200,11 @@ MESSAGE=$(printf "🔔 Remnawave Backup\n📅 Date: %s\n📦 Archive contents:\n
 send_telegram() {
     local file="$1"
     local caption="$2"
-    local curl_cmd="curl -F chat_id=\"\$TELEGRAM_CHAT_ID\""
-    [ -n "$TELEGRAM_TOPIC_ID" ] && curl_cmd="$curl_cmd -F message_thread_id=\"\$TELEGRAM_TOPIC_ID\""
-    curl_cmd="$curl_cmd -F document=@\"\$file\" -F \"caption=\$caption\" \"https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/sendDocument\" -o telegram_response.json"
+    local curl_cmd="curl"
+    [ -n "$TELEGRAM_BOT_PROXY" ] && curl_cmd="$curl_cmd --proxy \"$TELEGRAM_BOT_PROXY\""
+    curl_cmd="$curl_cmd -F chat_id=\"$TELEGRAM_CHAT_ID\""
+    [ -n "$TELEGRAM_TOPIC_ID" ] && curl_cmd="$curl_cmd -F message_thread_id=\"$TELEGRAM_TOPIC_ID\""
+    curl_cmd="$curl_cmd -F document=@\"$file\" -F \"caption=$caption\" \"https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendDocument\" -o telegram_response.json"
     eval "$curl_cmd"
 }
 if [ "$ARCHIVE_SIZE" -gt "$MAX_SIZE_MB" ]; then
