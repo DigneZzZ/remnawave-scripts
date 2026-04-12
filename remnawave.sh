@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.1.4
+# VERSION=6.1.6
 
-SCRIPT_VERSION="6.1.4"
+SCRIPT_VERSION="6.1.6"
 BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -788,14 +788,52 @@ migrate_compose_v588() {
     sed -i "s|${app_prefix}-redis-data:/data|valkey-socket:/var/run/valkey|g" "$COMPOSE_FILE"
 
     # Add valkey-socket volume to backend service if missing
-    if ! grep -A20 "image: remnawave/backend" "$COMPOSE_FILE" | grep -q "valkey-socket"; then
-        # Add volumes section with valkey-socket after <<: [*common, *logging, *env]
-        sed -i "/image: remnawave\/backend/,/ports:/{
-            /<<: \[.*env\]/a\\
-        volumes:\\
-            - valkey-socket:/var/run/valkey
-        }" "$COMPOSE_FILE"
-        echo -e "\033[38;5;244m  ✓ Added valkey-socket volume to backend\033[0m"
+    if ! grep -A20 "image: remnawave/backend\|image: ghcr.io/remnawave/backend" "$COMPOSE_FILE" | grep -q "valkey-socket"; then
+        # Detect backend image line and its indentation
+        local backend_image_line
+        backend_image_line=$(grep -n "image:.*remnawave/backend" "$COMPOSE_FILE" | head -1 | cut -d: -f1)
+        if [ -n "$backend_image_line" ]; then
+            local be_indent
+            be_indent=$(sed -n "${backend_image_line}p" "$COMPOSE_FILE" | sed 's/\([[:space:]]*\).*/\1/')
+            local be_indent_len=${#be_indent}
+            local be_sub_indent
+            be_sub_indent=$(printf '%*s' "$((be_indent_len + 4))" '')
+
+            # Check if backend already has a volumes: section
+            local be_section_end
+            be_section_end=$(tail -n "+$((backend_image_line + 1))" "$COMPOSE_FILE" | grep -n "^[[:space:]]\{1,$((be_indent_len - 1))\}[^[:space:]#]" | head -1 | cut -d: -f1)
+            if [ -z "$be_section_end" ]; then
+                be_section_end=$(wc -l < "$COMPOSE_FILE")
+            else
+                be_section_end=$((backend_image_line + be_section_end - 1))
+            fi
+
+            local be_volumes_offset
+            be_volumes_offset=$(sed -n "${backend_image_line},${be_section_end}p" "$COMPOSE_FILE" | grep -n "^${be_indent}volumes:" | head -1 | cut -d: -f1)
+
+            if [ -n "$be_volumes_offset" ]; then
+                # volumes: exists — add entry under it
+                local be_volumes_abs=$((backend_image_line + be_volumes_offset - 1))
+                sed -i "${be_volumes_abs}a\\
+${be_sub_indent}- valkey-socket:/var/run/valkey" "$COMPOSE_FILE"
+            else
+                # No volumes: section — insert before networks: or ports: or depends_on:
+                local insert_before_offset
+                insert_before_offset=$(sed -n "${backend_image_line},${be_section_end}p" "$COMPOSE_FILE" | grep -n "^${be_indent}\(networks:\|ports:\|depends_on:\)" | head -1 | cut -d: -f1)
+                if [ -n "$insert_before_offset" ]; then
+                    local insert_abs=$((backend_image_line + insert_before_offset - 1))
+                    local vol_block
+                    vol_block=$(mktemp)
+                    {
+                        echo "${be_indent}volumes:"
+                        echo "${be_sub_indent}- valkey-socket:/var/run/valkey"
+                    } > "$vol_block"
+                    sed -i "$((insert_abs - 1))r ${vol_block}" "$COMPOSE_FILE"
+                    rm -f "$vol_block"
+                fi
+            fi
+            echo -e "\033[38;5;244m  ✓ Added valkey-socket volume to backend\033[0m"
+        fi
     fi
 
     # Replace/add redis command block and fix healthcheck
