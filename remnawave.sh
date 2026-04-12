@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.1.2
+# VERSION=6.1.3
 
-SCRIPT_VERSION="6.1.2"
+SCRIPT_VERSION="6.1.3"
 BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -753,6 +753,12 @@ migrate_compose_v588() {
         needs_migration=true
     fi
 
+    # Check if redis service is missing unix socket command (broken migration)
+    if grep -q "image:.*valkey" "$COMPOSE_FILE" 2>/dev/null && \
+       ! grep -q "unixsocket /var/run/valkey/valkey.sock" "$COMPOSE_FILE" 2>/dev/null; then
+        needs_migration=true
+    fi
+
     if [ "$needs_migration" = false ]; then
         return 0
     fi
@@ -782,7 +788,7 @@ migrate_compose_v588() {
     sed -i "s|${app_prefix}-redis-data:/data|valkey-socket:/var/run/valkey|g" "$COMPOSE_FILE"
 
     # Add valkey-socket volume to backend service if missing
-    if ! grep -A5 "image: remnawave/backend" "$COMPOSE_FILE" | grep -q "valkey-socket"; then
+    if ! grep -A20 "image: remnawave/backend" "$COMPOSE_FILE" | grep -q "valkey-socket"; then
         # Add volumes section with valkey-socket after <<: [*common, *logging, *env]
         sed -i "/image: remnawave\/backend/,/ports:/{
             /<<: \[.*env\]/a\\
@@ -792,43 +798,68 @@ migrate_compose_v588() {
         echo -e "\033[38;5;244m  ✓ Added valkey-socket volume to backend\033[0m"
     fi
 
-    # Replace redis command with socket-based config
-    # Find the command block under redis service and replace
-    local temp_file=$(mktemp)
-    local in_redis_command=false
-    local command_done=false
-    while IFS= read -r line; do
-        if [[ "$line" =~ "command:" ]] && [ "$command_done" = false ] && grep -q "valkey-server" "$COMPOSE_FILE"; then
-            # Check if we're in the redis service section
-            if [ "$in_redis_command" = false ]; then
-                in_redis_command=true
-                echo "        command: >" >> "$temp_file"
-                echo "            valkey-server" >> "$temp_file"
-                echo "            --save \"\"" >> "$temp_file"
-                echo "            --appendonly no" >> "$temp_file"
-                echo "            --maxmemory-policy noeviction" >> "$temp_file"
-                echo "            --loglevel warning" >> "$temp_file"
-                echo "            --unixsocket /var/run/valkey/valkey.sock" >> "$temp_file"
-                echo "            --unixsocketperm 777" >> "$temp_file"
-                echo "            --port 0" >> "$temp_file"
-                command_done=true
-                continue
-            fi
-        fi
-        if [ "$in_redis_command" = true ] && [ "$command_done" = true ]; then
-            # Skip old command lines until we hit healthcheck or another section
-            if [[ "$line" =~ ^[[:space:]]*"--" ]] || [[ "$line" =~ ^[[:space:]]*"valkey-server" ]]; then
-                continue
-            fi
-            in_redis_command=false
-        fi
-        echo "$line" >> "$temp_file"
-    done < "$COMPOSE_FILE"
-    mv "$temp_file" "$COMPOSE_FILE"
+    # Replace/add redis command block and fix healthcheck
+    local redis_image_line
+    redis_image_line=$(grep -n "image:.*valkey" "$COMPOSE_FILE" | head -1 | cut -d: -f1)
 
-    # Update healthcheck to use socket
-    sed -i "s|test: \['CMD', 'valkey-cli', 'ping'\]|test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']|g" "$COMPOSE_FILE"
-    echo -e "\033[38;5;244m  ✓ Updated Redis healthcheck for socket\033[0m"
+    if [ -n "$redis_image_line" ]; then
+        # Find healthcheck line in redis section
+        local hc_offset
+        hc_offset=$(tail -n "+${redis_image_line}" "$COMPOSE_FILE" | grep -n "healthcheck:" | head -1 | cut -d: -f1)
+
+        if [ -n "$hc_offset" ]; then
+            local hc_abs=$((redis_image_line + hc_offset - 1))
+
+            # Remove existing command block (if any) between image and healthcheck
+            local cmd_offset
+            cmd_offset=$(sed -n "${redis_image_line},${hc_abs}p" "$COMPOSE_FILE" | grep -n "command:" | head -1 | cut -d: -f1)
+            if [ -n "$cmd_offset" ]; then
+                local cmd_abs=$((redis_image_line + cmd_offset - 1))
+                # Count continuation lines (indented deeper than command:)
+                local continuation_count=0
+                while IFS= read -r cl; do
+                    if [[ "$cl" =~ ^[[:space:]]{12} ]]; then
+                        continuation_count=$((continuation_count + 1))
+                    else
+                        break
+                    fi
+                done < <(tail -n "+$((cmd_abs + 1))" "$COMPOSE_FILE")
+                local cmd_end=$((cmd_abs + continuation_count))
+                sed -i "${cmd_abs},${cmd_end}d" "$COMPOSE_FILE"
+                # Recalculate healthcheck position after deletion
+                hc_offset=$(tail -n "+${redis_image_line}" "$COMPOSE_FILE" | grep -n "healthcheck:" | head -1 | cut -d: -f1)
+                hc_abs=$((redis_image_line + hc_offset - 1))
+            fi
+
+            # Insert new command block before healthcheck
+            local cmd_block
+            cmd_block=$(mktemp)
+            cat > "$cmd_block" << 'CMDBLOCK'
+        command: >
+            valkey-server
+            --save ""
+            --appendonly no
+            --maxmemory-policy noeviction
+            --loglevel warning
+            --unixsocket /var/run/valkey/valkey.sock
+            --unixsocketperm 777
+            --port 0
+CMDBLOCK
+            sed -i "$((hc_abs - 1))r ${cmd_block}" "$COMPOSE_FILE"
+            rm -f "$cmd_block"
+            echo -e "\033[38;5;244m  ✓ Updated Redis command for socket\033[0m"
+
+            # Fix healthcheck test line (handles both quote formats and spacing)
+            redis_image_line=$(grep -n "image:.*valkey" "$COMPOSE_FILE" | head -1 | cut -d: -f1)
+            local test_offset
+            test_offset=$(tail -n "+${redis_image_line}" "$COMPOSE_FILE" | grep -n "test:.*ping" | head -1 | cut -d: -f1)
+            if [ -n "$test_offset" ]; then
+                local test_abs=$((redis_image_line + test_offset - 1))
+                sed -i "${test_abs}s|.*test:.*|            test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']|" "$COMPOSE_FILE"
+            fi
+            echo -e "\033[38;5;244m  ✓ Updated Redis healthcheck for socket\033[0m"
+        fi
+    fi
 
     # Replace old volume definition with valkey-socket
     sed -i "s|${app_prefix}-redis-data:|valkey-socket:|g" "$COMPOSE_FILE"
@@ -849,6 +880,12 @@ check_compose_v588_migration_needed() {
     fi
 
     if ! grep -q "valkey-socket:/var/run/valkey" "$COMPOSE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check if redis service is missing unix socket command (broken migration)
+    if grep -q "image:.*valkey" "$COMPOSE_FILE" 2>/dev/null && \
+       ! grep -q "unixsocket /var/run/valkey/valkey.sock" "$COMPOSE_FILE" 2>/dev/null; then
         return 0
     fi
 
