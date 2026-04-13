@@ -635,10 +635,11 @@ install_tor() {
     TOR_CONTROL_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
     # Try to generate hashed password, fallback to cookie auth only if tor not available yet
     if command -v tor >/dev/null 2>&1; then
-        TOR_HASHED_PASSWORD=$(tor --hash-password "$TOR_CONTROL_PASSWORD" 2>/dev/null || echo "")
+        TOR_HASHED_PASSWORD=$(tor --hash-password "$TOR_CONTROL_PASSWORD" 2>&1 | grep "^16:")
     fi
     
-    # Save password for reference (secure permissions set below)
+                    mkdir -p /etc/tor
+        # Save password for reference (secure permissions set below)
     echo "$TOR_CONTROL_PASSWORD" > /etc/tor/.control_password
     chmod 600 /etc/tor/.control_password
     chown debian-tor:debian-tor /etc/tor/.control_password 2>/dev/null || chown tor:tor /etc/tor/.control_password 2>/dev/null || true
