@@ -3013,10 +3013,16 @@ validate_caddyfile() {
     fi
     
     # Валидация с теми же volume что и в рабочем контейнере
+    local ssl_volume=""
+    if [ -d "$APP_DIR/ssl" ] && [ -f "$APP_DIR/ssl/fullchain.crt" ]; then
+        ssl_volume="-v $APP_DIR/ssl:/etc/caddy/ssl:ro"
+    fi
+
     if docker run --rm \
         -v "$APP_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
         -v "/etc/letsencrypt:/etc/letsencrypt:ro" \
         -v "$APP_DIR/html:/var/www/html:ro" \
+        $ssl_volume \
         -e "SELF_STEAL_DOMAIN=$SELF_STEAL_DOMAIN" \
         -e "SELF_STEAL_PORT=$SELF_STEAL_PORT" \
         caddy:${CADDY_VERSION}-alpine \
