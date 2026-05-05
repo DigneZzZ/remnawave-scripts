@@ -1920,7 +1920,7 @@ https://{$SELF_STEAL_DOMAIN} {
 }
 
 :{$SELF_STEAL_PORT} {
-	tls internal
+	tls /etc/caddy/ssl/fullchain.crt /etc/caddy/ssl/private.key
 	respond 204
 	log off
 }
@@ -1988,7 +1988,7 @@ https://{$SELF_STEAL_DOMAIN} {
 }
 
 :{$SELF_STEAL_PORT} {
-	tls internal
+	tls /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{$SELF_STEAL_DOMAIN}/{$SELF_STEAL_DOMAIN}.crt /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{$SELF_STEAL_DOMAIN}/{$SELF_STEAL_DOMAIN}.key
 	respond 204
 	log off
 }
