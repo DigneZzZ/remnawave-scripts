@@ -3,8 +3,8 @@
 # This script installs and manages Remnawave Panel
 # VERSION=6.1.6
 
-SCRIPT_VERSION="6.1.6"
-BACKUP_SCRIPT_VERSION="1.4.0"  # Версия backup скрипта создаваемого Schedule функцией
+SCRIPT_VERSION="6.1.7"
+BACKUP_SCRIPT_VERSION="1.4.1"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
     shift  
@@ -3266,7 +3266,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.4.0"
+BACKUP_SCRIPT_VERSION="1.4.1"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -4368,51 +4368,97 @@ if [ "$TELEGRAM_ENABLED" = "true" ];
             local file_path="$1"
             local caption="$2"
             local part_info="$3"
-            
+
             local full_caption="${caption}"
             if [ -n "$part_info" ]; then
                 full_caption="${caption}
 
 ${part_info}"
             fi
-            
+
+            local response_file
+            response_file=$(mktemp)
+            local http_code
+
             # Используем обычный Markdown вместо MarkdownV2 для совместимости
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
                     -F "parse_mode=Markdown" \
-                    -F "message_thread_id=$telegram_thread_id" >/dev/null 2>&1
+                    -F "message_thread_id=$telegram_thread_id" \
+                    -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
-                    -F "parse_mode=Markdown" >/dev/null 2>&1
+                    -F "parse_mode=Markdown" \
+                    -o "$response_file" -w "%{http_code}" 2>/dev/null)
             fi
-            
-            return $?
+            local rc=$?
+
+            if [ "$rc" -ne 0 ]; then
+                log_message "ERROR: curl failed (exit $rc) when sending to Telegram"
+                rm -f "$response_file"
+                return 1
+            fi
+
+            if [ "${http_code:-0}" -ge 400 ] 2>/dev/null; then
+                local desc
+                desc=$(jq -r '.description // empty' "$response_file" 2>/dev/null)
+                [ -z "$desc" ] && desc=$(head -c 500 "$response_file" 2>/dev/null)
+                log_message "ERROR: Telegram API error (HTTP $http_code): $desc"
+                rm -f "$response_file"
+                return 1
+            fi
+
+            rm -f "$response_file"
+            return 0
         }
-        
+
         # Функция отправки текстового сообщения
         send_telegram_message() {
             local message="$1"
-            
+
+            local response_file
+            response_file=$(mktemp)
+            local http_code
+
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
-                    -F "message_thread_id=$telegram_thread_id" >/dev/null 2>&1
+                    -F "message_thread_id=$telegram_thread_id" \
+                    -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
-                    -F "parse_mode=Markdown" >/dev/null 2>&1
+                    -F "parse_mode=Markdown" \
+                    -o "$response_file" -w "%{http_code}" 2>/dev/null)
             fi
-            
-            return $?
+            local rc=$?
+
+            if [ "$rc" -ne 0 ]; then
+                log_message "ERROR: curl failed (exit $rc) when sending to Telegram"
+                rm -f "$response_file"
+                return 1
+            fi
+
+            if [ "${http_code:-0}" -ge 400 ] 2>/dev/null; then
+                local desc
+                desc=$(jq -r '.description // empty' "$response_file" 2>/dev/null)
+                [ -z "$desc" ] && desc=$(head -c 500 "$response_file" 2>/dev/null)
+                log_message "ERROR: Telegram API error (HTTP $http_code): $desc"
+                rm -f "$response_file"
+                return 1
+            fi
+
+            rm -f "$response_file"
+            return 0
         }
         
         # Проверяем размер и отправляем
