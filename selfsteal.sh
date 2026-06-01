@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.7.1
+# VERSION=2.8.0
 
-SCRIPT_VERSION="2.7.1"
+SCRIPT_VERSION="2.8.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -75,6 +75,16 @@ MANUAL_SSL_KEY=""
 WEB_SERVER="caddy"
 WEB_SERVER_EXPLICIT=false
 WEB_SERVER_CONFIG_FILE=""
+
+# HTTP/3 (QUIC) for Caddy — DISABLED by default.
+# Reality forwards TCP only; advertising/serving QUIC on a TCP-only dest
+# is a needless fingerprint. Enable explicitly with --h3 / --quic if wanted.
+ENABLE_H3=false
+
+# Per-install template mutation (anti-fingerprint) — ENABLED by default.
+# Makes each install byte-unique (title/brand/colors/noise) and strips known
+# provenance leaks (README, beacons, placeholder manifest). Disable: --no-randomize
+RANDOMIZE_TEMPLATE=true
 
 # Socket Configuration (nginx only)
 # By default uses Unix socket for better performance
@@ -1226,6 +1236,16 @@ while [ $# -gt 0 ]; do
             fi
             shift
             ;;
+        --h3|--quic|--enable-h3)
+            # Enable HTTP/3 (QUIC) in Caddy (off by default; Reality is TCP-only)
+            ENABLE_H3=true
+            shift
+            ;;
+        --no-randomize|--no-mutate)
+            # Disable per-install template mutation (serve templates as downloaded)
+            RANDOMIZE_TEMPLATE=false
+            shift
+            ;;
         --force|-f)
             # Force mode - skip DNS validation and interactive prompts
             FORCE_MODE=true
@@ -1870,7 +1890,7 @@ EOF
 	https_port {$SELF_STEAL_PORT}
 	default_bind 127.0.0.1
 	servers {
-		protocols h1 h2 h3
+		protocols __CADDY_PROTOCOLS__
 		listener_wrappers {
 			proxy_protocol {
 				allow 127.0.0.1/32
@@ -1903,8 +1923,15 @@ http://{$SELF_STEAL_DOMAIN} {
 }
 
 https://{$SELF_STEAL_DOMAIN} {
-	# Enable compression (zstd preferred, gzip fallback)
-	encode zstd gzip
+	# Compression (gzip only) + headers to mirror the mainstream nginx profile.
+	# zstd Content-Encoding is rare on real sites; gzip matches the working nginx.
+	encode gzip
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		X-XSS-Protection "1; mode=block"
+	}
 	tls /etc/caddy/ssl/fullchain.crt /etc/caddy/ssl/private.key
 	root * /var/www/html
 	try_files {path} /index.html
@@ -1939,7 +1966,7 @@ EOF
 	https_port {$SELF_STEAL_PORT}
 	default_bind 127.0.0.1
 	servers {
-		protocols h1 h2 h3
+		protocols __CADDY_PROTOCOLS__
 		listener_wrappers {
 			proxy_protocol {
 				allow 127.0.0.1/32
@@ -1972,8 +1999,15 @@ http://{$SELF_STEAL_DOMAIN} {
 }
 
 https://{$SELF_STEAL_DOMAIN} {
-	# Enable compression (zstd preferred, gzip fallback)
-	encode zstd gzip
+	# Compression (gzip only) + headers to mirror the mainstream nginx profile.
+	# zstd Content-Encoding is rare on real sites; gzip matches the working nginx.
+	encode gzip
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		X-XSS-Protection "1; mode=block"
+	}
 	root * /var/www/html
 	try_files {path} /index.html
 	file_server
@@ -2000,6 +2034,19 @@ https://{$SELF_STEAL_DOMAIN} {
 }
 EOF
         log_success "Caddyfile created"
+    fi
+
+    # Apply HTTP/3 toggle. Default = "h1 h2" (TCP-only, matches Reality + nginx).
+    # --h3/--quic switches to "h1 h2 h3" and lets Caddy advertise/serve QUIC.
+    local caddy_protocols="h1 h2"
+    if [ "${ENABLE_H3:-false}" = true ]; then
+        caddy_protocols="h1 h2 h3"
+    fi
+    sed -i "s|__CADDY_PROTOCOLS__|$caddy_protocols|g" "$APP_DIR/Caddyfile"
+    if [ "$caddy_protocols" = "h1 h2" ]; then
+        log_info "HTTP/3 (QUIC) disabled — TCP-only profile (enable with --h3 if you need it)"
+    else
+        log_warning "HTTP/3 (QUIC) enabled — note: Reality forwards TCP only, so QUIC/UDP is still not actually served"
     fi
 }
 
@@ -3074,6 +3121,99 @@ show_current_template_info() {
     echo
 }
 
+# ============================================
+# Template Mutation (anti-fingerprint)
+# ============================================
+# Makes every install byte-unique and slightly different in appearance so the
+# served decoy does NOT match the public sni-templates repo by hash/title/
+# structure, and strips known provenance leaks. Safe for the minified
+# React/Vite SPA shells most templates ship as: it never renames CSS classes
+# or reorders DOM (that would break the bundles) — uniqueness comes from
+# title/brand/meta/manifest changes, a per-install CSS hue rotation, byte
+# noise, cache-busters and a freshly generated favicon.
+randomize_template() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+
+    # --- helpers ---------------------------------------------------------
+    _rt_hex() {  # _rt_hex N -> N random bytes as lowercase hex
+        local n="${1:-4}"
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -hex "$n" 2>/dev/null && return 0
+        fi
+        head -c "$n" /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n' && return 0
+        echo "$RANDOM$RANDOM$RANDOM"
+    }
+    _rt_pick() { local a=("$@"); echo "${a[RANDOM % ${#a[@]}]}"; }
+
+    log_info "Mutating template for per-install uniqueness (anti-fingerprint)..."
+
+    # --- 1. strip provenance / non-asset leaks --------------------------
+    # README.md ships the SmallPoppa source URLs + wget instructions; .map
+    # files leak original sources; markdown/license are never served content.
+    find "$dir" -type f \( -iname '*.md' -o -iname '*.markdown' \
+        -o -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname '*.map' \
+        -o -iname '.gitignore' -o -iname '.gitattributes' \) -delete 2>/dev/null || true
+
+    # --- 2. per-install identity ----------------------------------------
+    local adjs=(Swift Bright Lumen Nimbus Vivid Prime Atlas Pulse Nova Quartz Onyx Vertex Cobalt Ember Drift Solace Zephyr Apex Halcyon Meridian Aero Cedar Indigo Mistral)
+    local nouns=(Cloud Vault Hub Forge Works Studio Labs Stream Desk Space Grid Port Wave Loop Stack Nest Spark Core Pixel Harbor Bay Field Crest Point)
+    local brand; brand="$(_rt_pick "${adjs[@]}") $(_rt_pick "${nouns[@]}")"
+    local short="${brand%% *}"
+    local tails=("$brand" "$brand — $(_rt_pick Home Dashboard Portal Online Service Cloud Center Access)" "$short · $(_rt_pick Files Media Tools Hub Suite)")
+    local new_title; new_title="$(_rt_pick "${tails[@]}")"
+    local descs=("Fast, simple and secure." "Your files, anywhere you go." "Built for speed and privacy." "Reliable service, every day." "Modern tools that just work." "Simple. Fast. Yours.")
+    local new_desc; new_desc="$(_rt_pick "${descs[@]}")"
+
+    # per-install color rotation: shift UI hue, counter-rotate media so photos
+    # stay correct. One injected <style> recolors any template, SPA or static.
+    local deg=$(( (RANDOM % 300) + 30 ))   # 30..329 degrees
+    local sat=$(( (RANDOM % 30) + 90 ))    # 90..119 percent
+    local cssv; cssv="$(_rt_hex 3)"
+
+    # --- 3. mutate HTML files -------------------------------------------
+    local f
+    while IFS= read -r -d '' f; do
+        sed -i "s#<title>[^<]*</title>#<title>${new_title}</title>#" "$f" 2>/dev/null || true
+        sed -i "s#MyWebSite#${brand}#g; s#MySite#${short}#g" "$f" 2>/dev/null || true
+        sed -i "s#\(name=[\"']description[\"'][^>]*content=\)[\"'][^\"']*[\"']#\1\"${new_desc}\"#Ig" "$f" 2>/dev/null || true
+        # drop external Google Fonts (off-box fetch + breaks if blocked in RU); system fonts take over
+        sed -i "/fonts\.googleapis\.com/d; /fonts\.gstatic\.com/d" "$f" 2>/dev/null || true
+        # neutralize phone-home IP beacon -> same-origin 404 -> existing fallback text
+        sed -i "s#https\?://api\.ipify\.org[^\"')]*#/_s/ip#g" "$f" 2>/dev/null || true
+        # fix the broken default Vite favicon reference
+        sed -i "s#/vite\.svg#/favicon.svg#g" "$f" 2>/dev/null || true
+        # cache-buster on local css/js refs (changes hash + request pattern)
+        sed -i -E "s#((href|src)=\"[^\"]*\.(css|js))(\?[^\"]*)?\"#\1?v=${cssv}\"#g" "$f" 2>/dev/null || true
+        # per-install color shift + byte noise, injected into <head>
+        sed -i "s#</head>#<style>html{filter:hue-rotate(${deg}deg) saturate(${sat}%)}img,picture,video,svg,canvas{filter:hue-rotate(-${deg}deg)}</style><!-- $(_rt_hex 6) --></head>#I" "$f" 2>/dev/null || true
+    done < <(find "$dir" -type f -iname '*.html' -print0 2>/dev/null)
+
+    # --- 4. mutate css/js: kill phone-home beacons + byte noise ---------
+    # The api.ipify.org beacon lives inside the minified JS bundle, not the
+    # HTML, so it must be neutralized here. Replaced with a same-origin path:
+    # the SPA fallback returns index.html, JSON parse fails, and the template's
+    # own .catch() shows its "IP unknown" text — no off-box request is made.
+    while IFS= read -r -d '' f; do
+        sed -i "s#https\?://api\.ipify\.org[^\"')]*#/_s/ip#g" "$f" 2>/dev/null || true
+        printf '\n/* %s */\n' "$(_rt_hex 6)" >> "$f" 2>/dev/null || true
+    done < <(find "$dir" -type f \( -iname '*.css' -o -iname '*.js' \) -print0 2>/dev/null)
+
+    # --- 5. clean random favicon (also removes svgjs.dev generator marker) -
+    local hue=$(( RANDOM % 360 ))
+    cat > "$dir/favicon.svg" <<SVG 2>/dev/null || true
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue},68%,50%)"/><circle cx="32" cy="32" r="13" fill="hsl($(( (hue + 45) % 360 )),72%,90%)"/></svg>
+SVG
+
+    # --- 6. fix placeholder manifest brand ------------------------------
+    while IFS= read -r -d '' f; do
+        sed -i "s#MyWebSite#${brand}#g; s#MySite#${short}#g" "$f" 2>/dev/null || true
+    done < <(find "$dir" -type f \( -iname '*.webmanifest' -o -iname 'manifest.json' \) -print0 2>/dev/null)
+
+    log_success "Template mutated — brand: ${brand}, hue +${deg}° (unique per install)"
+    return 0
+}
+
 download_template() {
     local template_type="$1"
     local template_folder=""
@@ -3099,16 +3239,19 @@ download_template() {
     
     # Пробуем разные методы загрузки
     if download_via_git "$template_folder"; then
+        [ "${RANDOMIZE_TEMPLATE:-true}" = true ] && randomize_template "$HTML_DIR"
         setup_file_permissions
         return 0
     fi
     
     if download_via_api "$template_folder"; then
+        [ "${RANDOMIZE_TEMPLATE:-true}" = true ] && randomize_template "$HTML_DIR"
         setup_file_permissions
         return 0
     fi
     
     if download_via_curl_fallback "$template_folder"; then
+        [ "${RANDOMIZE_TEMPLATE:-true}" = true ] && randomize_template "$HTML_DIR"
         setup_file_permissions
         return 0
     fi
@@ -3418,14 +3561,14 @@ create_default_html() {
 </head>
 <body>
     <div class="container">
-        <h1>🌐 Caddy for Reality Selfsteal</h1>
+        <h1>🌐 Caddy</h1>
         <p>Caddy server is running correctly and ready to serve your content.</p>
         <div class="status">✅ Service Active</div>
         <div class="info">
             <h3>🎨 Ready for Templates</h3>
             <p>Use the template manager to install website templates:</p>
-            <div class="command">selfsteal template</div>
-            <p>Choose from 10 pre-built AI-generated templates including meme sites, downloaders, file converters, and more!</p>
+            <div class="command"> template</div>
+            
         </div>
     </div>
 </body>
@@ -4350,6 +4493,10 @@ show_help() {
     echo -e "${WHITE}Server Options:${NC}"
     printf "   ${CYAN}%-22s${NC} %s\n" "--nginx" "Use Nginx as web server"
     printf "   ${CYAN}%-22s${NC} %s\n" "--caddy" "Use Caddy as web server (default)"
+    echo
+    echo -e "${WHITE}Caddy Options:${NC}"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--h3, --quic" "Enable HTTP/3 (QUIC) — OFF by default"
+    printf "   ${CYAN}%-22s${NC} %s\n" "--no-randomize" "Don't mutate templates on install"
     echo
     echo -e "${WHITE}Nginx Options:${NC}"
     printf "   ${CYAN}%-22s${NC} %s\n" "--socket" "Use Unix socket (default)"
