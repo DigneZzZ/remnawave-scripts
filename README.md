@@ -331,6 +331,8 @@ selfsteal template list              # List templates
 selfsteal template install converter # Install template
 ```
 
+> 🛡️ **v2.8.0:** every template is uniquified per install (no byte-identical fingerprint) and provenance leaks are stripped. HTTP/3 is **off by default** — enable with `--h3`; disable mutation with `--no-randomize`. See [README-selfsteal.md](README-selfsteal.md).
+
 **Xray Reality config:**
 ```json
 { "realitySettings": { "dest": "127.0.0.1:9443", "serverNames": ["your-domain.com"] } }

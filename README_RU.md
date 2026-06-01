@@ -330,6 +330,8 @@ selfsteal template list              # Список шаблонов
 selfsteal template install converter # Установить шаблон
 ```
 
+> 🛡️ **v2.8.0:** каждый шаблон уникализируется при установке (нет байт-в-байт отпечатка), утечки источника вырезаются. HTTP/3 **выключен по умолчанию** — включить `--h3`; отключить мутацию `--no-randomize`. Подробнее: [README-selfsteal.md](README-selfsteal.md).
+
 **Конфигурация Xray Reality:**
 ```json
 { "realitySettings": { "dest": "127.0.0.1:9443", "serverNames": ["your-domain.com"] } }
