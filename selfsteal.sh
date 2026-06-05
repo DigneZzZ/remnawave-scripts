@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.8.3
+# VERSION=2.9.0
 
-SCRIPT_VERSION="2.8.3"
+SCRIPT_VERSION="2.9.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -184,6 +184,88 @@ create_dir_safe() {
         mkdir -p "$dir" || { log_error "Failed to create directory: $dir"; return 1; }
     fi
     return 0
+}
+
+# ============================================
+# Docker image acquisition (Docker Hub rate-limit / RU-block resilient)
+# ============================================
+# Mirrors tried (in order) when a direct Docker Hub pull fails:
+#   - mirror.gcr.io        Google's pull-through cache of Docker Hub library
+#                          images. Trusted, RU-reachable, and pulls do NOT count
+#                          against Docker Hub rate limits. Tried first.
+#   - the rest             RU-reachable community mirrors, last resort only
+#                          (logged when used — they could substitute images).
+# Each mirror image is re-tagged to the bare reference (caddy:TAG / nginx:TAG)
+# so the unchanged docker-compose `image:` and `docker run ... validate` reuse
+# the local image with no further registry I/O.
+DOCKER_HUB_MIRRORS=("mirror.gcr.io" "dockerhub.timeweb.cloud" "huecker.io" "cr.yandex/mirror")
+
+# ensure_image <bare-ref>   e.g. caddy:2.11.4  or  nginx:1.29.3-alpine
+# Guarantees the bare ref exists locally. Returns 0 on success, 1 if the image
+# cannot be obtained from Docker Hub or any mirror.
+ensure_image() {
+    local ref="$1"
+    local repo="${ref%%:*}"
+    local tag="${ref##*:}"
+
+    # 0) Already present locally — nothing to do (idempotent, no network).
+    if docker image inspect "$ref" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    log_info "Fetching Docker image: $ref"
+
+    # 1) Direct pull — Docker Hub, or via `docker login` creds / daemon.json mirror.
+    local out
+    if out=$(docker pull "$ref" 2>&1); then
+        return 0
+    fi
+
+    # Only fall back to mirrors for registry/rate-limit/network problems.
+    if echo "$out" | grep -qiE 'pull rate limit|unauthenticated pull|toomanyrequests|error from registry|manifest unknown|manifest for .* not found|not found: manifest|no such host|connection refused|i/o timeout|timeout exceeded|tls handshake|denied|forbidden'; then
+        log_warning "Direct pull of $ref failed (Docker Hub rate limit or block). Trying mirrors..."
+    else
+        log_error "docker pull failed for $ref:"
+        echo "$out" | tail -3
+        return 1
+    fi
+
+    # 2) Mirror fallback: pull via explicit registry path, then retag to bare ref.
+    local mirror src
+    for mirror in "${DOCKER_HUB_MIRRORS[@]}"; do
+        if [ "$mirror" = "cr.yandex/mirror" ]; then
+            src="$mirror/$repo:$tag"          # Yandex: no /library segment
+        else
+            src="$mirror/library/$repo:$tag"
+        fi
+        if docker pull "$src" >/dev/null 2>&1; then
+            if docker tag "$src" "$ref" >/dev/null 2>&1; then
+                docker rmi "$src" >/dev/null 2>&1 || true
+                if [ "$mirror" = "mirror.gcr.io" ]; then
+                    log_success "Image obtained via $mirror (Google cache): $ref"
+                else
+                    log_warning "Image obtained via fallback mirror '$mirror': $ref"
+                fi
+                return 0
+            fi
+        fi
+    done
+
+    log_error "Could not obtain image $ref from Docker Hub or any mirror."
+    echo -e "${GRAY}   Options:${NC}"
+    echo -e "${GRAY}     • docker login                                  # raises the pull limit${NC}"
+    echo -e "${GRAY}     • add a registry mirror to /etc/docker/daemon.json, then: systemctl restart docker${NC}"
+    echo -e "${GRAY}     • retry later (Docker Hub anonymous limit resets in ~6h)${NC}"
+    return 1
+}
+
+# Ensure the image for the currently selected web server is present locally.
+ensure_runtime_image() {
+    if [ "$WEB_SERVER" = "nginx" ]; then
+        ensure_image "nginx:${NGINX_VERSION}"
+    else
+        ensure_image "caddy:${CADDY_VERSION}"
+    fi
 }
 
 # ============================================
@@ -2954,8 +3036,12 @@ install_command() {
         fi
         
         log_info "Validating Nginx configuration..."
-        if validate_nginx_config; then
+        local nginx_validate_rc=0
+        validate_nginx_config || nginx_validate_rc=$?
+        if [ "$nginx_validate_rc" -eq 0 ]; then
             log_success "Nginx configuration is valid"
+        elif [ "$nginx_validate_rc" -eq 2 ]; then
+            log_warning "Pre-flight validation skipped (could not pull nginx:${NGINX_VERSION}); continuing — 'docker compose up' will report any real image error"
         else
             log_error "Invalid Nginx configuration"
             echo -e "${YELLOW}💡 Check configuration in: $APP_DIR/conf.d/${NC}"
@@ -2981,6 +3067,9 @@ install_command() {
         fi
     fi
 
+    # Ensure the runtime image is available (Docker Hub rate-limit / RU-block
+    # resilient) so `docker compose up` reuses a local image instead of pulling.
+    ensure_runtime_image || log_warning "Could not pre-fetch image; 'docker compose up' will attempt its own pull"
     if docker compose up -d; then
         log_success "$server_display_name services started successfully"
     else
@@ -3045,22 +3134,38 @@ install_command() {
 # Validate Nginx configuration
 validate_nginx_config() {
     log_info "Validating Nginx configuration..."
-    
-    if docker run --rm \
+
+    # Make the image available locally (mirror fallback) before validating.
+    ensure_image "nginx:${NGINX_VERSION}" || true
+
+    local out
+    if out=$(docker run --rm \
         -v "$APP_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
         -v "$APP_DIR/conf.d:/etc/nginx/conf.d:ro" \
         -v "$APP_DIR/ssl:/etc/nginx/ssl:ro" \
         nginx:${NGINX_VERSION} \
-        nginx -t 2>&1; then
+        nginx -t 2>&1); then
         return 0
-    else
-        return 1
     fi
+
+    # A failed `docker run` due to a pull/registry problem is NOT a config error.
+    if echo "$out" | grep -qiE 'pull rate limit|unauthenticated pull|toomanyrequests|error from registry|manifest unknown|manifest for .* not found|not found: manifest|no such host|connection refused|i/o timeout|timeout exceeded|cannot connect to the docker daemon|denied'; then
+        echo -e "${YELLOW}⚠️  Could not validate: Docker failed to pull image nginx:${NGINX_VERSION}${NC}"
+        echo -e "${GRAY}   This is NOT an nginx config error (Docker Hub rate limit / block).${NC}"
+        return 2
+    fi
+
+    echo "$out" | tail -20
+    return 1
 }
 
 validate_caddyfile() {
     echo -e "${BLUE}🔍 Validating Caddyfile...${NC}"
-    
+
+    # Make the image available locally (with mirror fallback) so the validation
+    # `docker run` below reuses it instead of pulling from Docker Hub.
+    ensure_image "caddy:${CADDY_VERSION}" || true
+
     # Загружаем переменные из .env файла для валидации
     if [ -f "$APP_DIR/.env" ]; then
         export $(grep -v '^#' "$APP_DIR/.env" | xargs)
@@ -3865,7 +3970,8 @@ up_command() {
     
     log_info "Starting $server_name Services"
     cd "$APP_DIR" || return 1
-    
+
+    ensure_runtime_image || log_warning "Could not pre-fetch image; 'docker compose up' will attempt its own pull"
     if docker compose up -d; then
         log_success "$server_name services started successfully"
     else
@@ -3908,7 +4014,13 @@ restart_command() {
         server_name="Nginx"
         read -p "Validate Nginx config before restart? [Y/n]: " -r validate_choice
         if [[ ! $validate_choice =~ ^[Nn]$ ]]; then
-            validate_nginx_config || return 1
+            local nginx_validate_rc=0
+            validate_nginx_config || nginx_validate_rc=$?
+            if [ "$nginx_validate_rc" -eq 1 ]; then
+                return 1
+            elif [ "$nginx_validate_rc" -eq 2 ]; then
+                log_warning "Validation skipped (could not pull nginx:${NGINX_VERSION}); restarting anyway"
+            fi
         fi
     else
         server_name="Caddy"
@@ -3918,10 +4030,12 @@ restart_command() {
             validate_caddyfile || caddy_validate_rc=$?
             if [ "$caddy_validate_rc" -eq 1 ]; then
                 return 1
+            elif [ "$caddy_validate_rc" -eq 2 ]; then
+                log_warning "Validation skipped (could not pull caddy:${CADDY_VERSION}); restarting anyway"
             fi
         fi
     fi
-    
+
     log_info "Restarting $server_name Services"
     down_command
     sleep 2
@@ -4456,7 +4570,7 @@ edit_command() {
                 ${EDITOR:-nano} "$APP_DIR/nginx.conf"
                 read -p "Validate Nginx config after editing? [Y/n]: " -r validate_choice
                 if [[ ! $validate_choice =~ ^[Nn]$ ]]; then
-                    validate_nginx_config
+                    validate_nginx_config || true
                 fi
                 log_warning "Restart $server_name to apply changes: $APP_NAME restart"
                 ;;
@@ -4464,7 +4578,7 @@ edit_command() {
                 ${EDITOR:-nano} "$APP_DIR/conf.d/selfsteal.conf"
                 read -p "Validate Nginx config after editing? [Y/n]: " -r validate_choice
                 if [[ ! $validate_choice =~ ^[Nn]$ ]]; then
-                    validate_nginx_config
+                    validate_nginx_config || true
                 fi
                 log_warning "Restart $server_name to apply changes: $APP_NAME restart"
                 ;;
