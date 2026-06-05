@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.8.2
+# VERSION=2.8.3
 
-SCRIPT_VERSION="2.8.2"
+SCRIPT_VERSION="2.8.3"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -95,7 +95,7 @@ SOCKET_PATH="/dev/shm/nginx.sock"
 # Docker Configuration (will be set based on web server)
 CONTAINER_NAME=""
 VOLUME_PREFIX=""
-CADDY_VERSION="2.10.2"
+CADDY_VERSION="2.11.4"
 NGINX_VERSION="1.29.3-alpine"
 
 # Paths Configuration (initialized by init_web_server_config)
