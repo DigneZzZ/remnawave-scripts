@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.8.0
+# VERSION=2.8.1
 
-SCRIPT_VERSION="2.8.0"
+SCRIPT_VERSION="2.8.1"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1899,6 +1899,11 @@ EOF
 		}
 	}
 	auto_https disable_redirects
+	# Disable the admin API (:2019). We never use `caddy reload`/admin here
+	# (Caddy is managed via docker compose), and its default bind resolves the
+	# hostname "localhost" — which fails under network_mode: host when the
+	# container has no 127.0.0.1 localhost entry, causing a boot loop.
+	admin off
 	log {
 		output file /var/log/caddy/access.log {
 			roll_size 10MB
@@ -1975,6 +1980,11 @@ EOF
 		}
 	}
 	auto_https disable_redirects
+	# Disable the admin API (:2019). We never use `caddy reload`/admin here
+	# (Caddy is managed via docker compose), and its default bind resolves the
+	# hostname "localhost" — which fails under network_mode: host when the
+	# container has no 127.0.0.1 localhost entry, causing a boot loop.
+	admin off
 	log {
 		output file /var/log/caddy/access.log {
 			roll_size 10MB
