@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.8.1
+# VERSION=2.8.2
 
-SCRIPT_VERSION="2.8.1"
+SCRIPT_VERSION="2.8.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -2968,8 +2968,12 @@ install_command() {
             return 1
         fi
 
-        if validate_caddyfile; then
+        local caddy_validate_rc=0
+        validate_caddyfile || caddy_validate_rc=$?
+        if [ "$caddy_validate_rc" -eq 0 ]; then
             log_success "Caddyfile is valid"
+        elif [ "$caddy_validate_rc" -eq 2 ]; then
+            log_warning "Pre-flight validation skipped (could not pull caddy:${CADDY_VERSION}); continuing — 'docker compose up' will report any real image error"
         else
             log_error "Invalid Caddyfile configuration"
             echo -e "${YELLOW}💡 Check syntax: $APP_NAME edit${NC}"
@@ -3075,22 +3079,39 @@ validate_caddyfile() {
         ssl_volume="-v $APP_DIR/ssl:/etc/caddy/ssl:ro"
     fi
 
-    if docker run --rm \
+    # Use the SAME image as the runtime container (docker-compose), not a
+    # separate "-alpine" tag — otherwise we pull a second image just to validate,
+    # doubling Docker Hub pulls and making rate-limit failures more likely.
+    local validate_output
+    if validate_output=$(docker run --rm \
         -v "$APP_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
         -v "/etc/letsencrypt:/etc/letsencrypt:ro" \
         -v "$APP_DIR/html:/var/www/html:ro" \
         $ssl_volume \
         -e "SELF_STEAL_DOMAIN=$SELF_STEAL_DOMAIN" \
         -e "SELF_STEAL_PORT=$SELF_STEAL_PORT" \
-        caddy:${CADDY_VERSION}-alpine \
-        caddy validate --config /etc/caddy/Caddyfile 2>&1; then
+        caddy:${CADDY_VERSION} \
+        caddy validate --config /etc/caddy/Caddyfile 2>&1); then
         echo -e "${GREEN}✅ Caddyfile is valid${NC}"
         return 0
-    else
-        echo -e "${RED}❌ Invalid Caddyfile configuration${NC}"
-        echo -e "${YELLOW}💡 Check syntax: $APP_NAME edit${NC}"
-        return 1
     fi
+
+    # A failed `docker run` (Docker Hub rate limit, no network, missing image,
+    # daemon down) is NOT a Caddyfile error — don't mislabel it as invalid config.
+    if echo "$validate_output" | grep -qiE 'pull rate limit|unauthenticated pull|toomanyrequests|error from registry|manifest unknown|manifest for .* not found|not found: manifest|no such host|connection refused|i/o timeout|timeout exceeded|cannot connect to the docker daemon|denied'; then
+        echo -e "${YELLOW}⚠️  Could not validate: Docker failed to pull image caddy:${CADDY_VERSION}${NC}"
+        echo -e "${GRAY}   This is NOT a Caddyfile syntax error.${NC}"
+        echo -e "${GRAY}   Most likely a Docker Hub pull rate limit. Options:${NC}"
+        echo -e "${GRAY}     • docker login                # raises the pull limit${NC}"
+        echo -e "${GRAY}     • docker pull caddy:${CADDY_VERSION}   # warm the cache / retry${NC}"
+        echo -e "${GRAY}     • or wait for the limit to reset (~6h)${NC}"
+        return 2
+    fi
+
+    echo -e "${RED}❌ Invalid Caddyfile configuration${NC}"
+    echo "$validate_output" | tail -20
+    echo -e "${YELLOW}💡 Check syntax: $APP_NAME edit${NC}"
+    return 1
 }
 
 show_current_template_info() {
@@ -3893,7 +3914,11 @@ restart_command() {
         server_name="Caddy"
         read -p "Validate Caddyfile before restart? [Y/n]: " -r validate_choice
         if [[ ! $validate_choice =~ ^[Nn]$ ]]; then
-            validate_caddyfile || return 1
+            local caddy_validate_rc=0
+            validate_caddyfile || caddy_validate_rc=$?
+            if [ "$caddy_validate_rc" -eq 1 ]; then
+                return 1
+            fi
         fi
     fi
     
@@ -4466,7 +4491,7 @@ edit_command() {
                 ${EDITOR:-nano} "$APP_DIR/Caddyfile"
                 read -p "Validate Caddyfile after editing? [Y/n]: " -r validate_choice
                 if [[ ! $validate_choice =~ ^[Nn]$ ]]; then
-                    validate_caddyfile
+                    validate_caddyfile || true
                 fi
                 log_warning "Restart $server_name to apply changes: $APP_NAME restart"
                 ;;
