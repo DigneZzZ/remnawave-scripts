@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.9.0
+# VERSION=2.10.0
 
-SCRIPT_VERSION="2.9.0"
+SCRIPT_VERSION="2.10.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -4180,11 +4180,13 @@ renew_ssl_command() {
         return 1
     fi
     
-    # Check if this is Nginx installation
+    # Caddy manages certificates itself; "renew" here means force a re-issue.
+    # Use an OR-list so a non-zero return propagates cleanly instead of tripping
+    # `set -e` and tearing down the caller (e.g. the interactive menu loop).
     if [ "$WEB_SERVER" != "nginx" ]; then
-        echo -e "${YELLOW}ℹ️  SSL renewal is only available for Nginx installations${NC}"
-        echo -e "${GRAY}   Caddy manages SSL certificates automatically via ACME${NC}"
-        return 0
+        local caddy_rc=0
+        reissue_caddy_cert || caddy_rc=$?
+        return $caddy_rc
     fi
     
     echo -e "${WHITE}🔐 SSL Certificate Renewal${NC}"
@@ -4352,6 +4354,238 @@ renew_ssl_command() {
             echo -e "${GRAY}Renewal cancelled${NC}"
             ;;
     esac
+}
+
+# ============================================
+# Caddy certificate force re-issue
+# ============================================
+
+# Resolve the actual Docker volume backing Caddy's /data (where ACME certs live).
+# Primary: read it straight off the container's mount table — exact, and it
+# survives `docker compose stop` (the container still exists, just stopped).
+# Fallback: try the compose-prefixed name (project = APP_DIR basename) and the
+# bare declared name.
+get_caddy_data_volume() {
+    local vol=""
+    vol=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/data" }}{{ .Name }}{{ end }}{{ end }}' "$CONTAINER_NAME" 2>/dev/null || true)
+    if [ -n "$vol" ]; then
+        echo "$vol"
+        return 0
+    fi
+
+    local proj
+    proj=$(basename "$APP_DIR")
+    local cand
+    for cand in "${proj}_${VOLUME_PREFIX}_data" "${VOLUME_PREFIX}_data"; do
+        if docker volume inspect "$cand" >/dev/null 2>&1; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Read the leaf certificate Caddy currently has stored for $domain (PEM -> stdout).
+# Empty output means "no managed certificate stored yet". The `*` is a CA dir
+# (e.g. acme-v02.api.letsencrypt.org-directory) and is globbed inside the container.
+read_caddy_stored_cert() {
+    local vol="$1"
+    local domain="$2"
+    docker run --rm -v "$vol:/data:ro" "caddy:${CADDY_VERSION}" \
+        sh -c "cat /data/caddy/certificates/*/${domain}/${domain}.crt 2>/dev/null" 2>/dev/null || true
+}
+
+# Run a throwaway shell command against Caddy's stopped data volume (read-write).
+# Returns the docker exit code; callers decide how to react.
+caddy_data_exec() {
+    local vol="$1"
+    local cmd="$2"
+    docker run --rm -v "$vol:/data" "caddy:${CADDY_VERSION}" sh -c "$cmd" >/dev/null 2>&1
+}
+
+# Force Caddy to discard its stored certificate and obtain a brand-new one.
+# This is the recovery path for a bad / self-signed / stuck certificate.
+reissue_caddy_cert() {
+    check_running_as_root
+
+    if [ ! -f "$APP_DIR/docker-compose.yml" ]; then
+        log_error "Caddy is not installed. Run '$APP_NAME install' first."
+        return 1
+    fi
+
+    echo -e "${WHITE}🔐 Force Re-issue Caddy SSL Certificate${NC}"
+    echo -e "${GRAY}$(printf '─%.0s' $(seq 1 40))${NC}"
+    echo
+
+    # Manual-SSL installs (--ssl-cert/--ssl-key) have no ACME cert to re-issue.
+    if [ -f "$APP_DIR/Caddyfile" ] && grep -q "tls /etc/caddy/ssl/" "$APP_DIR/Caddyfile" 2>/dev/null; then
+        log_warning "This installation uses a manual SSL certificate (--ssl-cert/--ssl-key)."
+        echo -e "${GRAY}   There is no ACME certificate to re-issue.${NC}"
+        echo -e "${GRAY}   To replace it, copy new files into ${APP_DIR}/ssl/ and run:${NC}"
+        echo -e "${CYAN}     $APP_NAME restart${NC}"
+        return 0
+    fi
+
+    # Domain from config
+    local domain
+    domain=$(grep "SELF_STEAL_DOMAIN=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2 || true)
+    if [ -z "$domain" ]; then
+        log_error "Could not determine domain from $APP_DIR/.env"
+        return 1
+    fi
+    printf "   ${WHITE}%-13s${NC} ${GRAY}%s${NC}\n" "Domain:" "$domain"
+
+    # The Caddy image is needed for the wipe + verify helper containers.
+    if ! ensure_image "caddy:${CADDY_VERSION}"; then
+        log_error "Caddy image caddy:${CADDY_VERSION} is not available; cannot continue."
+        return 1
+    fi
+
+    # Resolve the data volume BEFORE stopping (we read it off the container).
+    local data_vol
+    if ! data_vol=$(get_caddy_data_volume); then
+        log_error "Could not locate Caddy's data volume."
+        echo -e "${GRAY}   Try: docker volume ls | grep caddy${NC}"
+        return 1
+    fi
+    printf "   ${WHITE}%-13s${NC} ${GRAY}%s${NC}\n" "Data volume:" "$data_vol"
+    echo
+
+    # Rate-limit guardrail.
+    echo -e "${YELLOW}⚠️  This deletes the stored certificate and asks the CA for a fresh one.${NC}"
+    echo -e "${GRAY}   Let's Encrypt limits duplicate certificates to ~5 per domain per week.${NC}"
+    echo -e "${GRAY}   Use it to recover from a bad/self-signed cert — not on a schedule.${NC}"
+    echo
+    if [ "$FORCE_MODE" != true ]; then
+        # Tolerate EOF / non-TTY stdin (cron, `curl | bash`, redirected input):
+        # a failed read must not trip `set -e`; treat it as "no" and cancel cleanly.
+        local confirm=""
+        if ! read -r -p "$(echo -e "${WHITE}Proceed with force re-issue? [y/N]:${NC} ")" confirm; then
+            confirm=""
+        fi
+        if [[ ! $confirm =~ ^[Yy]$ ]]; then
+            echo -e "${GRAY}Cancelled (run with -f to re-issue non-interactively).${NC}"
+            return 0
+        fi
+        echo
+    fi
+
+    # 1) Stop Caddy so the volume is free. Keep the container (stop, not down) so
+    #    the volume mapping persists; fall back to down if stop is unavailable.
+    log_info "Stopping Caddy..."
+    cd "$APP_DIR" || return 1
+    docker compose stop >/dev/null 2>&1 || docker compose down >/dev/null 2>&1 || true
+
+    # 2) Record the current certificate's serial so we can tell a genuinely new
+    #    cert from the old one later (a re-issue always gets a fresh serial).
+    local old_serial=""
+    local old_pem
+    old_pem=$(read_caddy_stored_cert "$data_vol" "$domain")
+    if [ -n "$old_pem" ]; then
+        old_serial=$(echo "$old_pem" | openssl x509 -serial -noout 2>/dev/null | sed 's/serial=//' || true)
+    fi
+
+    # 3) Back up the current certificate, then wipe certs + stale issuance locks.
+    #    The backup lets us roll back if issuance fails (rate limit, port 80 down)
+    #    so the site is never left without a usable certificate. The ACME account
+    #    (/data/caddy/acme) and local CA (/data/caddy/pki) are kept intact.
+    log_info "Removing stored certificate data..."
+    caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates.bak; if [ -d /data/caddy/certificates ]; then cp -a /data/caddy/certificates /data/caddy/certificates.bak; fi' || true
+    if caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates /data/caddy/locks'; then
+        log_success "Stored certificate cleared"
+    else
+        # If we can't actually clear the old cert, the re-issue cannot happen and
+        # we must not later mistake the surviving cert for a fresh one. Abort,
+        # drop the (still-intact) backup, and bring Caddy back up as it was.
+        log_error "Could not clear stored certificate data; aborting to avoid an inconsistent state."
+        caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates.bak' || true
+        docker compose up -d >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # 4) Start Caddy — it obtains a fresh certificate on boot for named sites.
+    log_info "Starting Caddy..."
+    if ! docker compose up -d >/dev/null 2>&1; then
+        log_error "Failed to start Caddy"
+        log_warning "Restoring previous certificate..."
+        docker compose stop >/dev/null 2>&1 || docker compose down >/dev/null 2>&1 || true
+        caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates; if [ -d /data/caddy/certificates.bak ]; then mv /data/caddy/certificates.bak /data/caddy/certificates; fi' || true
+        docker compose up -d >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # 5) Wait for a genuinely new certificate to land in storage. "New" means a
+    #    publicly-trusted issuer (not Caddy's local CA) AND a serial different
+    #    from the one we recorded before the wipe — so a stale leftover cert can
+    #    never be misreported as a fresh re-issue.
+    echo
+    log_info "Waiting for Caddy to obtain a new certificate (up to 90s)..."
+    local waited=0 step=3 pem="" issuer="" serial="" got=false
+    while [ "$waited" -lt 90 ]; do
+        sleep "$step"
+        waited=$((waited + step))
+        pem=$(read_caddy_stored_cert "$data_vol" "$domain")
+        if [ -n "$pem" ]; then
+            issuer=$(echo "$pem" | openssl x509 -issuer -noout 2>/dev/null | sed 's/issuer=//' || true)
+            serial=$(echo "$pem" | openssl x509 -serial -noout 2>/dev/null | sed 's/serial=//' || true)
+            if [ -n "$issuer" ] && ! echo "$issuer" | grep -qi "Caddy Local Authority" \
+               && [ -n "$serial" ] && [ "$serial" != "$old_serial" ]; then
+                got=true
+                break
+            fi
+        fi
+        printf "   ${GRAY}... still waiting (%ss)${NC}\r" "$waited"
+    done
+    echo
+
+    if [ "$got" = true ]; then
+        local start expiry
+        start=$(echo "$pem" | openssl x509 -startdate -noout 2>/dev/null | sed 's/notBefore=//' || true)
+        expiry=$(echo "$pem" | openssl x509 -enddate -noout 2>/dev/null | sed 's/notAfter=//' || true)
+        # Issuance succeeded — drop the rollback backup.
+        caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates.bak' || true
+        log_success "New certificate issued"
+        printf "   ${WHITE}%-13s${NC} ${GRAY}%s${NC}\n" "Issuer:" "$issuer"
+        printf "   ${WHITE}%-13s${NC} ${GRAY}%s${NC}\n" "Valid From:" "$start"
+        printf "   ${WHITE}%-13s${NC} ${GRAY}%s${NC}\n" "Valid Until:" "$expiry"
+        echo
+        echo -e "${GREEN}✅ Done — Caddy is serving a fresh certificate.${NC}"
+        return 0
+    fi
+
+    # No publicly-trusted certificate within the window — roll back to the old one
+    # so the site keeps a working certificate instead of none.
+    log_warning "No publicly-trusted certificate yet."
+    if [ -n "$issuer" ]; then
+        echo -e "${GRAY}   Current issuer: $issuer${NC}"
+    fi
+    if caddy_data_exec "$data_vol" '[ -d /data/caddy/certificates.bak ]'; then
+        log_info "Restoring the previous certificate to avoid downtime..."
+        docker compose stop >/dev/null 2>&1 || docker compose down >/dev/null 2>&1 || true
+        caddy_data_exec "$data_vol" 'rm -rf /data/caddy/certificates; mv /data/caddy/certificates.bak /data/caddy/certificates' || true
+        docker compose up -d >/dev/null 2>&1 || true
+        log_success "Previous certificate restored — Caddy will keep retrying issuance in the background"
+    fi
+    echo -e "${GRAY}   Common causes of failed issuance:${NC}"
+    echo -e "${GRAY}     • Port 80 not reachable from the internet (HTTP-01 challenge)${NC}"
+    echo -e "${GRAY}     • DNS for $domain not pointing at this server${NC}"
+    echo -e "${GRAY}     • Hit the CA rate limit (wait, then retry)${NC}"
+    echo -e "${GRAY}   Watch progress: ${CYAN}$APP_NAME logs${NC}"
+    return 1
+}
+
+# Public entry point for the `reissue-cert` command: dispatch by web server.
+# OR-lists keep a non-zero return from tripping `set -e` mid-function so the
+# real exit code propagates to the caller.
+reissue_cert_command() {
+    local rc=0
+    if [ "$WEB_SERVER" = "nginx" ]; then
+        # Nginx uses acme.sh; renew_ssl_command already exposes a force path.
+        renew_ssl_command || rc=$?
+    else
+        reissue_caddy_cert || rc=$?
+    fi
+    return $rc
 }
 
 clean_logs_command() {
@@ -4674,7 +4908,8 @@ show_help() {
     printf "   ${CYAN}%-12s${NC} %s\n" "edit" "✏️  Edit configuration files"
     printf "   ${CYAN}%-12s${NC} %s\n" "uninstall" "🗑️  Remove installation"
     printf "   ${CYAN}%-12s${NC} %s\n" "template" "🎨 Manage website templates"
-    printf "   ${CYAN}%-12s${NC} %s\n" "renew-ssl" "🔐 Renew SSL certificate (Nginx)"
+    printf "   ${CYAN}%-12s${NC} %s\n" "renew-ssl" "🔐 Renew/re-issue SSL certificate"
+    printf "   ${CYAN}%-12s${NC} %s\n" "reissue-cert" "🔐 Force a fresh SSL certificate now (Caddy)"
     printf "   ${CYAN}%-12s${NC} %s\n" "menu" "📋 Show interactive menu"
     printf "   ${CYAN}%-12s${NC} %s\n" "update" "🔄 Check for script updates"
     echo
@@ -4691,6 +4926,12 @@ show_help() {
     echo -e "  ${GRAY}# Install with manual wildcard certificate${NC}"
     echo -e "  ${CYAN}$APP_NAME --nginx --force --domain reality.example.com \\${NC}"
     echo -e "  ${CYAN}    --ssl-cert /path/to/fullchain.crt --ssl-key /path/to/private.key install${NC}"
+    echo
+    echo -e "${WHITE}Force a fresh Caddy certificate (one command):${NC}"
+    echo -e "  ${GRAY}# Interactive (asks to confirm — protects against CA rate limits)${NC}"
+    echo -e "  ${CYAN}$APP_NAME reissue-cert${NC}"
+    echo -e "  ${GRAY}# Non-interactive (skip the prompt)${NC}"
+    echo -e "  ${CYAN}$APP_NAME reissue-cert -f${NC}"
     echo
     echo -e "${WHITE}Xray Reality Configuration:${NC}"
     echo -e "  ${GRAY}Socket mode (default):  \"target\": \"/dev/shm/nginx.sock\", \"xver\": 1${NC}"
@@ -5170,9 +5411,11 @@ main_menu() {
         echo -e "   ${WHITE}10)${NC} 🧹 Clean logs"
         echo -e "   ${WHITE}11)${NC} ✏️  Edit configuration"
         
-        # Show SSL renewal option only for Nginx
+        # SSL: Nginx renews via acme.sh; Caddy force re-issues its managed cert
         if [ "$WEB_SERVER" = "nginx" ]; then
             echo -e "   ${WHITE}12)${NC} 🔐 Renew SSL certificate"
+        else
+            echo -e "   ${WHITE}12)${NC} 🔐 Force re-issue SSL certificate"
         fi
         echo
 
@@ -5211,13 +5454,10 @@ main_menu() {
             9) logs_size_command; read -p "Press Enter to continue..." ;;
             10) clean_logs_command; read -p "Press Enter to continue..." ;;
             11) edit_command; read -p "Press Enter to continue..." ;;
-            12) 
-                if [ "$WEB_SERVER" = "nginx" ]; then
-                    renew_ssl_command
-                else
-                    echo -e "${YELLOW}ℹ️  SSL renewal is only available for Nginx installations${NC}"
-                    echo -e "${GRAY}   Caddy manages SSL certificates automatically${NC}"
-                fi
+            12)
+                # `|| true`: a failed re-issue (rate limit, port 80, DNS) must
+                # not let `set -e` kill the menu loop — keep showing the menu.
+                renew_ssl_command || true
                 read -p "Press Enter to continue..."
                 ;;
             13) uninstall_command; read -p "Press Enter to continue..." ;;
@@ -5251,6 +5491,7 @@ case "$COMMAND" in
     uninstall) uninstall_command ;;
     template) template_command ;;
     renew-ssl) renew_ssl_command ;;
+    reissue-cert|reissue|recert) reissue_cert_command ;;
     guide) guide_command ;;
     menu) main_menu ;;
     update) update_command ;;
