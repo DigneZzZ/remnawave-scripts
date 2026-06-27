@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Version: 4.3.3
 set -e
-SCRIPT_VERSION="4.3.3"
+SCRIPT_VERSION="4.3.4"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -2829,8 +2829,9 @@ get_current_xray_core_version() {
     # Сначала проверяем, примонтирован ли Xray в контейнер
     if is_xray_mounted && [ -f "$XRAY_FILE" ]; then
         # Xray примонтирован, получаем версию из локального файла
-        version_output=$("$XRAY_FILE" -version 2>/dev/null)
-        if [ $? -eq 0 ]; then
+        # Присваивание как условие if: при set -e «голое» version_output=$(...)
+        # с ненулевым кодом завершило бы скрипт до проверки [ $? -eq 0 ].
+        if version_output=$("$XRAY_FILE" -version 2>/dev/null); then
             version=$(echo "$version_output" | head -n1 | awk '{print $2}')
             echo "$version (external)"
             return 0
@@ -2871,7 +2872,10 @@ get_xray_core() {
         echo
         
         # Текущая версия
-        current_version=$(get_current_xray_core_version)
+        # || true: функция возвращает 1, когда Xray не установлен (контейнер
+        # остановлен / не примонтирован). Без защиты set -e (стр. 3) молча убил
+        # бы скрипт прямо здесь — баннер уже показан, а меню не появляется.
+        current_version=$(get_current_xray_core_version || true)
         echo -e "\033[1;37m🌐 Current Status:\033[0m"
         printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Xray Version:" "$current_version"
         printf "   \033[38;5;15m%-15s\033[0m \033[38;5;250m%s\033[0m\n" "Architecture:" "$ARCH"
