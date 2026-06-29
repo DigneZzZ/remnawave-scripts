@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.1.6
+# VERSION=6.2.0
 
-SCRIPT_VERSION="6.1.7"
+SCRIPT_VERSION="6.2.0"
 BACKUP_SCRIPT_VERSION="1.4.1"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -9328,26 +9328,48 @@ get_admin_token() {
 }
 
 # Create API token for subscription-page
+#
+# Remnawave panel contract for POST /api/tokens (panel v2.x):
+#   - name          : token name, 2..30 chars (renamed from the legacy "tokenName")
+#   - expiresInDays : REQUIRED integer >= 1 — token lifetime in days
+#   - scopes        : optional string array; defaults to ["*"] (full access).
+#                     We request only the scopes the subscription-page needs.
+# NOTE: the panel rejects the ENTIRE request if any scope is invalid, so the
+#       list below is verified against the panel scope catalog.
 create_subscription_api_token() {
     local admin_token="$1"
     local token_name="${2:-subscription-page}"
+    local expires_in_days="${3:-3650}"  # ~10 years — subscription-page token must be long-lived
     local panel_port=$(get_panel_port)
     local domain_url="127.0.0.1:$panel_port"
-    
-    local token_data="{\"tokenName\":\"$token_name\"}"
+
+    # Scopes required by remnawave-subscription-page
+    local scopes_json='["subscription-page-configs:list","subscription-page-configs:get","subscriptions:subpage-config","system:metadata","users:by-username"]'
+
+    local token_data="{\"name\":\"$token_name\",\"expiresInDays\":$expires_in_days,\"scopes\":$scopes_json}"
     local api_response=$(make_api_request "POST" "http://$domain_url/api/tokens" "$admin_token" "$token_data")
-    
+
     if [ -z "$api_response" ]; then
         return 1
     fi
-    
-    local api_token=$(echo "$api_response" | jq -r '.response.token // ""' 2>/dev/null)
-    
+
+    # Response format (unchanged): { "response": { ..., "token": "<jwt>" } }
+    local api_token=""
+    if command -v jq >/dev/null 2>&1; then
+        api_token=$(echo "$api_response" | jq -r '.response.token // ""' 2>/dev/null)
+    fi
+    # Fallback if jq is missing or returned nothing (token is a JWT: contains no quotes)
+    if [ -z "$api_token" ] || [ "$api_token" = "null" ]; then
+        api_token=$(echo "$api_response" | grep -o '"token":"[^"]*"' | head -1 | sed 's/"token":"//;s/"$//')
+    fi
+
     if [ -n "$api_token" ] && [ "$api_token" != "null" ]; then
         echo "$api_token"
         return 0
     fi
-    
+
+    # Surface the panel error (validation / invalid scope / auth) for debugging
+    echo -e "\033[38;5;244m   Debug: Token creation response: $api_response\033[0m" >&2
     return 1
 }
 
@@ -9473,7 +9495,12 @@ subpage_configure_token() {
     echo -e "\033[38;5;244m  1. Open Remnawave Panel in browser\033[0m"
     echo -e "\033[38;5;244m  2. Login with admin credentials\033[0m"
     echo -e "\033[38;5;244m  3. Go to Settings → API Tokens\033[0m"
-    echo -e "\033[38;5;244m  4. Create new token named 'subscription-page'\033[0m"
+    echo -e "\033[38;5;244m  4. Create a new token:\033[0m"
+    echo -e "\033[38;5;244m       • Name:    subscription-page\033[0m"
+    echo -e "\033[38;5;244m       • Expiry:  set a long lifetime in days (e.g. 3650)\033[0m"
+    echo -e "\033[38;5;244m       • Scopes:  grant the subscription-page scopes:\033[0m"
+    echo -e "\033[38;5;244m                  subscription-page-configs:list, subscription-page-configs:get,\033[0m"
+    echo -e "\033[38;5;244m                  subscriptions:subpage-config, system:metadata, users:by-username\033[0m"
     echo -e "\033[38;5;244m  5. Copy the token and paste below\033[0m"
     echo
     
