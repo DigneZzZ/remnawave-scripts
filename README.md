@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-5.8.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-6.3.0-blue.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
 
 ![remnawave-script](remnawave-script.webp)
@@ -101,7 +101,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 - **Admin auto-creation** — credentials saved to `admin-credentials.txt`
 - **Caddy Reverse Proxy** — Simple mode (auto SSL) or Secure mode (auth portal + MFA)
 - **Backup system** — full/DB-only backups, cron scheduling, Telegram delivery, version-aware restore → see [💾 Backup, Restore & Migration](#-backup-restore--migration)
-- **Variable migration** — deprecated env vars auto-removed on `update` (v2.2.0+)
+- **Safe updates** — automatic DB + config snapshot before every `update`, plus deprecated env-var migration (v2.2.0+)
+- **Subscription-page token** — auto-created with least-privilege scopes and a configurable lifetime (Remnawave panel v2.8.0+)
 
 <details>
 <summary><b>🌐 Standalone Subscription-Page</b></summary>
@@ -176,6 +177,8 @@ remnawave backup                    # Full system backup (compressed .tar.gz)
 remnawave backup --data-only        # Database only (.sql.gz)
 remnawave backup --no-compress      # Uncompressed backup
 ```
+
+> On `update`, a safety snapshot (DB dump + `.env`/compose) is created automatically under `backups/pre-update-*` before any breaking migration is applied.
 
 ### Scheduled Backups
 

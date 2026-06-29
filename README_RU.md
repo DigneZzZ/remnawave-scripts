@@ -2,7 +2,7 @@
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![Версия](https://img.shields.io/badge/версия-5.8.0-blue.svg)](#)
+[![Версия](https://img.shields.io/badge/версия-6.3.0-blue.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐_Языки-EN_|_RU-green.svg)](#)
 
 ![remnawave-script](remnawave-script.webp)
@@ -101,7 +101,8 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 - **Автосоздание админа** — credentials сохраняются в `admin-credentials.txt`
 - **Caddy Reverse Proxy** — Простой режим (авто SSL) или Безопасный режим (портал аутентификации + MFA)
 - **Система бэкапов** — полные/только БД, cron-расписание, доставка в Telegram, версионное восстановление → см. [💾 Бэкап, восстановление и миграция](#-бэкап-восстановление-и-миграция)
-- **Миграция переменных** — устаревшие env-переменные удаляются автоматически при `update` (v2.2.0+)
+- **Безопасное обновление** — автоматический снимок БД + конфигов перед каждым `update`, плюс миграция устаревших env-переменных (v2.2.0+)
+- **Токен subscription-page** — создаётся автоматически с минимально необходимыми скоупами и настраиваемым сроком жизни (Remnawave panel v2.8.0+)
 
 <details>
 <summary><b>🌐 Standalone Subscription-Page</b></summary>
@@ -176,6 +177,8 @@ remnawave backup                    # Полный системный бэкап
 remnawave backup --data-only        # Только база данных (.sql.gz)
 remnawave backup --no-compress      # Несжатый бэкап
 ```
+
+> При `update` перед применением любых ломающих миграций автоматически создаётся защитный снимок (дамп БД + `.env`/compose) в каталоге `backups/pre-update-*`.
 
 ### Бэкапы по расписанию
 
