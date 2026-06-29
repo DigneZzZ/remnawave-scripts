@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.2.0
+# VERSION=6.3.0
 
-SCRIPT_VERSION="6.2.0"
+SCRIPT_VERSION="6.3.0"
 BACKUP_SCRIPT_VERSION="1.4.1"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -10049,6 +10049,18 @@ NOT_CONNECTED_USERS_NOTIFICATIONS_ENABLED=false
 # Each value represents HOURS passed after user creation (user.createdAt)
 NOT_CONNECTED_USERS_NOTIFICATIONS_AFTER_HOURS=[6, 24, 48]
 
+### EXPIRATION NOTIFICATIONS (panel v2.8.0+) ###
+# Since v2.8.0 the old per-threshold expiration events are disabled by default and
+# consolidated into a single "user.expiration" event. Uncomment to restore old behavior.
+# Requires at least one channel: IS_TELEGRAM_NOTIFICATIONS_ENABLED=true OR WEBHOOK_ENABLED=true.
+# Array of integers -168..168 (no 0), max 5 negative + 5 positive values, sorted ascending.
+#EXPIRATION_NOTIFICATIONS_ENABLED=true
+#EXPIRATION_NOTIFICATIONS=[-72, -48, -24, 24]
+
+### SUBSCRIPTION REQUEST HISTORY (panel v2.8.0+) ###
+# Set to true to disable logging of subscription request history (SRH) records.
+SERVICE_DISABLE_SRH_RECORDS=false
+
 ### CLOUDFLARE ###
 # USED ONLY FOR docker-compose-prod-with-cf.yml
 # NOT USED BY THE APP ITSELF
@@ -12622,6 +12634,62 @@ check_images_for_updates() {
     fi
 }
 
+# Create a safety backup (database dump + config files) before applying an update.
+# Panel updates can carry breaking DB migrations, so we snapshot first.
+# Returns 0 if a database dump was created, 1 if only config files were saved.
+create_pre_update_backup() {
+    local backup_root="$APP_DIR/backups"
+    local ts=$(date +%Y%m%d_%H%M%S)
+    local dest="$backup_root/pre-update-$ts"
+    mkdir -p "$dest" 2>/dev/null
+
+    # Resolve DB container name (default convention, fallback to compose parse)
+    local db_container="${APP_NAME}-db"
+    if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$db_container"; then
+        local parsed_db
+        parsed_db=$(grep -E "container_name:.*db" "$COMPOSE_FILE" 2>/dev/null | head -1 | sed "s/.*container_name:[[:space:]]*['\"]*//" | sed "s/['\"].*//")
+        [ -n "$parsed_db" ] && db_container="$parsed_db"
+    fi
+
+    # Read Postgres credentials from .env (fallback to defaults)
+    local pg_user="postgres" pg_pass="postgres" pg_db="postgres" v
+    if [ -f "$ENV_FILE" ]; then
+        v=$(grep "^POSTGRES_USER=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"'); [ -n "$v" ] && pg_user="$v"
+        v=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"'); [ -n "$v" ] && pg_pass="$v"
+        v=$(grep "^POSTGRES_DB=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d '"'); [ -n "$v" ] && pg_db="$v"
+    fi
+
+    # Copy config files (best-effort)
+    local f
+    for f in .env .env.subscription docker-compose.yml; do
+        [ -f "$APP_DIR/$f" ] && cp "$APP_DIR/$f" "$dest/" 2>/dev/null
+    done
+
+    # Dump database if its container is running
+    local dumped=false
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$db_container"; then
+        echo -e "\033[38;5;244m   Dumping database '$pg_db' from '$db_container' (may take a moment)...\033[0m"
+        if docker exec -e PGPASSWORD="$pg_pass" "$db_container" \
+            pg_dump -U "$pg_user" -d "$pg_db" --clean --if-exists > "$dest/database.sql" 2>/dev/null \
+            && [ -s "$dest/database.sql" ]; then
+            gzip -f "$dest/database.sql" 2>/dev/null
+            dumped=true
+        else
+            rm -f "$dest/database.sql" 2>/dev/null
+        fi
+    else
+        echo -e "\033[1;33m   ⚠️  Database container '$db_container' is not running — DB dump skipped\033[0m"
+    fi
+
+    if [ "$dumped" = true ]; then
+        echo -e "\033[38;5;244m   Saved to: $dest (database.sql.gz + config)\033[0m"
+        return 0
+    fi
+
+    [ -f "$dest/.env" ] && echo -e "\033[38;5;244m   Config files saved to: $dest\033[0m"
+    return 1
+}
+
 update_command() {
     check_running_as_root
     if ! is_remnawave_installed; then
@@ -12755,8 +12823,22 @@ update_command() {
         exit 0
     fi
     
+    # === Safety backup before applying (panel updates may run breaking DB migrations) ===
+    echo
+    echo -e "\033[38;5;250m🛡️  Creating safety backup before update (database + config)...\033[0m"
+    if create_pre_update_backup; then
+        echo -e "\033[1;32m✅ Safety backup completed\033[0m"
+    else
+        echo -e "\033[1;33m⚠️  Could not create a full database backup (see messages above)\033[0m"
+        read -p "Continue update WITHOUT a fresh DB backup? (y/N): " -r continue_no_backup
+        if [[ ! $continue_no_backup =~ ^[Yy]$ ]]; then
+            echo -e "\033[1;33m⚠️  Update cancelled. Create a backup first: sudo $APP_NAME backup\033[0m"
+            exit 0
+        fi
+    fi
+
     echo -e "\033[38;5;250m📝 Step 4:\033[0m Downloading new images..."
-    
+
     local pull_exit_code=0
     $COMPOSE -f "$COMPOSE_FILE" pull 2>&1 || pull_exit_code=$?
     
