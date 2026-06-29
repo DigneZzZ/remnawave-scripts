@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Version: 4.3.3
 set -e
-SCRIPT_VERSION="4.3.4"
+SCRIPT_VERSION="4.3.5"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -1275,23 +1275,60 @@ follow_remnanode_logs() {
 }
 
 update_remnanode_script() {
+    local target_path="/usr/local/bin/$APP_NAME"
+
     # Получаем текущую версию перед обновлением
     local old_version="unknown"
-    if [ -f "/usr/local/bin/$APP_NAME" ]; then
-        old_version=$(grep "^SCRIPT_VERSION=" "/usr/local/bin/$APP_NAME" 2>/dev/null | head -1 | cut -d'"' -f2)
+    if [ -f "$target_path" ]; then
+        old_version=$(grep "^SCRIPT_VERSION=" "$target_path" 2>/dev/null | head -1 | cut -d'"' -f2)
         [ -z "$old_version" ] && old_version="unknown"
     fi
-    
+
     colorized_echo blue "Updating remnanode script (current: v$old_version)"
-    curl -sSL $SCRIPT_URL | install -m 755 /dev/stdin /usr/local/bin/$APP_NAME
-    
-    # Получаем новую версию после обновления
-    local new_version=$(grep "^SCRIPT_VERSION=" "/usr/local/bin/$APP_NAME" 2>/dev/null | head -1 | cut -d'"' -f2)
-    if [ -n "$new_version" ]; then
-        colorized_echo green "Remnanode script updated successfully: v$old_version → v$new_version"
-    else
-        colorized_echo green "Remnanode script updated successfully"
+
+    # Скачиваем во временный файл, а не через `curl | install /dev/stdin`:
+    # на минимальных системах /dev/stdin недоступен и install падает с
+    # "No such file or directory", curl получает ошибку 23, а файл остаётся
+    # старым — из-за чего вызывающий код зацикливался на обновлении.
+    local tmp_file
+    tmp_file=$(mktemp "${TMPDIR:-/tmp}/${APP_NAME}.XXXXXX") || {
+        colorized_echo red "Failed to create temporary file"
+        return 1
+    }
+
+    if ! curl -fsSL "$SCRIPT_URL" -o "$tmp_file"; then
+        colorized_echo red "Failed to download script from $SCRIPT_URL"
+        rm -f "$tmp_file"
+        return 1
     fi
+
+    # Проверяем, что скачали валидный скрипт (shebang + версия)
+    local new_version
+    new_version=$(grep "^SCRIPT_VERSION=" "$tmp_file" 2>/dev/null | head -1 | cut -d'"' -f2)
+    if [ -z "$new_version" ] || ! head -n1 "$tmp_file" | grep -q '^#!'; then
+        colorized_echo red "Downloaded file is not a valid remnanode script — aborting update"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    # Устанавливаем из обычного файла (без /dev/stdin)
+    if ! install -m 755 "$tmp_file" "$target_path"; then
+        colorized_echo red "Failed to install updated script to $target_path"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    rm -f "$tmp_file"
+
+    # Проверяем, что версия на диске действительно сменилась
+    local installed_version
+    installed_version=$(grep "^SCRIPT_VERSION=" "$target_path" 2>/dev/null | head -1 | cut -d'"' -f2)
+    if [ "$installed_version" != "$new_version" ]; then
+        colorized_echo red "Script update verification failed (expected v$new_version, got v${installed_version:-unknown})"
+        return 1
+    fi
+
+    colorized_echo green "Remnanode script updated successfully: v$old_version → v$installed_version"
+    return 0
 }
 
 update_remnanode() {
