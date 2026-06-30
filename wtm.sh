@@ -280,6 +280,10 @@ Monitoring:
     warp-memory           WARP memory diagnostic
     system-info           Show system information
 
+Xray:
+    regen-warp-xray       Rebuild Xray outbound + recompute reserved
+    xray-examples         Show Xray config examples
+
 Uninstallation:
     remove-warp           Uninstall WARP
     remove-tor            Uninstall Tor
@@ -661,14 +665,17 @@ install_warp() {
         error_exit "WARP configuration file not found"
     fi
 
-    # Emit a ready-to-paste native Xray `wireguard` outbound from the fresh
-    # credentials BEFORE we strip/edit the profile for wg-quick.
+    # Persist the account record first — generate_warp_xray_outbound reads it to
+    # derive the PoP-specific `reserved` value from the registration's client_id.
     mkdir -p /etc/wireguard
-    generate_warp_xray_outbound "$WGCF_PROFILE"
     if [ -f "$WGCF_TEMP_DIR/wgcf-account.toml" ]; then
         cp "$WGCF_TEMP_DIR/wgcf-account.toml" "$WARP_ACCOUNT_FILE"
         chmod 600 "$WARP_ACCOUNT_FILE"
     fi
+
+    # Emit a ready-to-paste native Xray `wireguard` outbound from the fresh
+    # credentials BEFORE we strip/edit the profile for wg-quick.
+    generate_warp_xray_outbound "$WGCF_PROFILE" "$WGCF_TEMP_DIR/wgcf-account.toml"
 
     # Adapt the profile for wg-quick (the host-interface install path):
     # drop DNS (we manage it), disable routing table, keep the tunnel alive.
@@ -717,11 +724,51 @@ install_warp() {
     echo -e "\033[38;5;244m   (paste it into your Xray config — see 'XRay Configuration' menu)\033[0m"
 }
 
+# Derive the account-specific WARP `reserved` triplet so that specific
+# Cloudflare PoPs (not just the generic anycast endpoint) accept the handshake.
+# The 3 bytes are the base64-decoded `client_id` of the registration. wgcf's
+# account.toml stores `device_id` + `access_token` but NOT `client_id`, so we
+# ask the WARP API for the registration record and read it from there.
+# Best-effort: prints "0, 0, 0" on any failure (the safe generic default).
+compute_warp_reserved() {
+    local account="${1:-$WARP_ACCOUNT_FILE}"
+    local fallback="0, 0, 0"
+    [ -f "$account" ] || { echo "$fallback"; return; }
+
+    local device_id access_token
+    device_id=$(grep -E '^[[:space:]]*device_id' "$account" | head -1 | \
+        sed -E "s/^[^=]*=[[:space:]]*//; s/['\"]//g" | tr -d '[:space:]')
+    access_token=$(grep -E '^[[:space:]]*access_token' "$account" | head -1 | \
+        sed -E "s/^[^=]*=[[:space:]]*//; s/['\"]//g" | tr -d '[:space:]')
+    [ -n "$device_id" ] && [ -n "$access_token" ] || { echo "$fallback"; return; }
+
+    local resp client_id
+    resp=$(curl -fsS --max-time 10 \
+        -H 'User-Agent: okhttp/3.12.1' \
+        -H 'CF-Client-Version: a-6.10-2158' \
+        -H "Authorization: Bearer $access_token" \
+        "https://api.cloudflareclient.com/v0a2158/reg/$device_id" 2>/dev/null) || {
+        echo "$fallback"; return; }
+
+    client_id=$(echo "$resp" | grep -o '"client_id"[[:space:]]*:[[:space:]]*"[^"]*"' | \
+        head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/')
+    [ -n "$client_id" ] || { echo "$fallback"; return; }
+
+    # client_id is base64 of exactly 3 bytes (4 chars) → decode to a decimal triplet.
+    local b0 b1 b2 rest
+    read -r b0 b1 b2 rest < <(printf '%s' "$client_id" | base64 -d 2>/dev/null | od -An -tu1)
+    case "$b0$b1$b2" in
+        ''|*[!0-9]*) echo "$fallback"; return;;
+    esac
+    echo "$b0, $b1, $b2"
+}
+
 # Build a native Xray `wireguard` outbound JSON from a wgcf profile.
 # This is the modern, officially-recommended way to use WARP with Xray (>=1.6.5):
 # Xray dials WARP directly, with no host wg-quick interface required.
 generate_warp_xray_outbound() {
     local profile="$1"
+    local account="${2:-$WARP_ACCOUNT_FILE}"
     [ -f "$profile" ] || return 1
 
     local secret v4 v6 addrs addr_json
@@ -738,8 +785,12 @@ generate_warp_xray_outbound() {
         addr_json="\"$v4\""
     fi
 
-    # reserved [0,0,0] works for the generic endpoint. Some Cloudflare PoPs need
-    # the account-specific value (from `wgcf-cli generate --xray` or warp-reg).
+    # reserved [0,0,0] works for the generic endpoint, but some Cloudflare PoPs
+    # need the account-specific value (3 bytes from the registration client_id).
+    # Compute it from the account record; fall back to [0,0,0] if the API is down.
+    local reserved
+    reserved=$(compute_warp_reserved "$account")
+
     cat > "$WARP_XRAY_FILE" <<EOF
 {
   "tag": "warp",
@@ -754,13 +805,37 @@ generate_warp_xray_outbound() {
         "allowedIPs": ["0.0.0.0/0", "::/0"]
       }
     ],
-    "reserved": [0, 0, 0],
+    "reserved": [$reserved],
     "mtu": 1280,
     "noKernelTun": false
   }
 }
 EOF
     chmod 600 "$WARP_XRAY_FILE"
+}
+
+# Rebuild the Xray outbound for an EXISTING install — recomputes the
+# account-specific `reserved` from the saved registration and rewrites
+# $WARP_XRAY_FILE in place. Lets users fix a stale [0,0,0] without reinstalling.
+regen_warp_xray_outbound() {
+    if [ ! -f "$WARP_CONFIG_FILE" ]; then
+        error "WARP is not installed ($WARP_CONFIG_FILE not found) — run: $0 install-warp"
+        return 1
+    fi
+    step "Regenerating native Xray WARP outbound..."
+    if ! generate_warp_xray_outbound "$WARP_CONFIG_FILE" "$WARP_ACCOUNT_FILE"; then
+        error "Failed to regenerate Xray outbound"
+        return 1
+    fi
+    local reserved
+    reserved=$(grep -o '"reserved": \[[^]]*\]' "$WARP_XRAY_FILE" | head -1)
+    ok "Xray outbound written to $WARP_XRAY_FILE"
+    if [ "$reserved" = '"reserved": [0, 0, 0]' ]; then
+        warn "reserved is still [0, 0, 0] — WARP API lookup failed or account record missing."
+        warn "Generic endpoint still works; re-run later or reinstall to fetch the real value."
+    else
+        info "Computed account-specific ${reserved}"
+    fi
 }
 
 check_ipv6_support() {
@@ -1764,8 +1839,8 @@ EOF
     fi
 
     printf "${YELLOW}• In Docker / read-only or unprivileged hosts add  \"noKernelTun\": true${NC}\n"
-    printf "${YELLOW}• Some Cloudflare PoPs need a real \"reserved\" — get it from${NC}\n"
-    printf "${YELLOW}  'wgcf-cli generate --xray' or the warp-reg one-liner${NC}\n\n"
+    printf "${YELLOW}• \"reserved\" is auto-computed from your WARP registration. If it${NC}\n"
+    printf "${YELLOW}  shows [0, 0, 0], refresh it with:  $(basename "$0") regen-warp-xray${NC}\n\n"
 
     printf "${BOLD}${CYAN}Full example: WARP + Tor + routing${NC}\n\n"
     printf "${GREEN}"
@@ -2254,6 +2329,9 @@ main() {
                 ;;
             restart-tor)
                 control_service restart tor
+                ;;
+            regen-warp-xray|warp-reserved)
+                regen_warp_xray_outbound
                 ;;
             xray-examples)
                 show_xray_examples
