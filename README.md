@@ -377,7 +377,7 @@ selfsteal template install converter # Install template
 ## 🔐 Security
 
 - Services bind to `127.0.0.1` by default
-- Auto-generated DB credentials, JWT secrets, API tokens
+- Auto-generated DB credentials, panel secrets (APP_SECRET), API tokens
 - UFW/firewalld guidance during setup
 - SSL/TLS via Caddy with DNS validation
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.3.0
+# VERSION=6.4.0
 
-SCRIPT_VERSION="6.3.0"
+SCRIPT_VERSION="6.4.0"
 BACKUP_SCRIPT_VERSION="1.4.1"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -942,6 +942,242 @@ check_compose_v588_migration_needed() {
     fi
 
     return 1
+}
+
+# ===== Panel v3.0.0 migration =====
+# v3 replaces JWT_AUTH_SECRET/JWT_API_TOKENS_SECRET with a single APP_SECRET
+# (value must be kept from JWT_AUTH_SECRET) and drops SWAGGER_PATH/SCALAR_PATH/
+# IS_DOCS_ENABLED (docs moved to fixed paths under /api/backend-tools).
+# Migration runs only during update and only after the target backend version
+# is confirmed (pulled image inspection, tag as fallback).
+
+get_backend_image_ref() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        return 1
+    fi
+
+    grep -E "image:[[:space:]]*['\"]?(ghcr\.io/)?remnawave/backend" "$COMPOSE_FILE" 2>/dev/null | \
+        head -1 | sed "s/.*image:[[:space:]]*//" | tr -d "'\"" | awk '{print $1}'
+}
+
+# Version of a LOCAL docker image (call after pull). Tries the OCI version
+# label first, then extracts package.json without running the container.
+get_image_panel_version() {
+    local image="$1"
+    local version=""
+
+    version=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image" 2>/dev/null)
+    if [ "$version" = "<no value>" ]; then
+        version=""
+    fi
+
+    if [ -z "$version" ]; then
+        local workdir cid
+        workdir=$(docker image inspect --format '{{.Config.WorkingDir}}' "$image" 2>/dev/null)
+        [ -z "$workdir" ] && workdir="/opt/app"
+        cid=$(docker create "$image" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            version=$(docker cp "$cid:$workdir/package.json" - 2>/dev/null | tar -xO 2>/dev/null | \
+                grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+            docker rm -f "$cid" >/dev/null 2>&1
+        fi
+    fi
+
+    version="${version#v}"
+    if [ -z "$version" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    echo "$version"
+}
+
+# Major version of the backend image referenced in docker-compose.yml.
+# Prints "3", "2", ... or "unknown". Image inspection first, tag as fallback.
+get_target_backend_major() {
+    local image version
+    image=$(get_backend_image_ref)
+    if [ -z "$image" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    version=$(get_image_panel_version "$image")
+    if [ "$version" != "unknown" ]; then
+        echo "${version%%.*}"
+        return 0
+    fi
+
+    case "${image##*:}" in
+        3|3.*) echo "3" ;;
+        2|2.*) echo "2" ;;
+        1|1.*) echo "1" ;;
+        *) echo "unknown"; return 1 ;;
+    esac
+}
+
+check_env_v3_migration_needed() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 1
+    fi
+
+    if grep -q "^JWT_AUTH_SECRET=" "$ENV_FILE" 2>/dev/null && \
+       ! grep -q "^APP_SECRET=" "$ENV_FILE" 2>/dev/null; then
+        return 0  # Migration needed
+    fi
+
+    return 1
+}
+
+migrate_env_v3() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 0
+    fi
+
+    if ! check_env_v3_migration_needed; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🔄 Migrating .env to panel v3.0.0 format (APP_SECRET)\033[0m"
+
+    local backup_file="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    # APP_SECRET must keep the value of JWT_AUTH_SECRET (existing sessions stay valid)
+    local jwt_secret
+    jwt_secret=$(grep "^JWT_AUTH_SECRET=" "$ENV_FILE" | head -1 | cut -d'=' -f2-)
+
+    sed -i "/^JWT_AUTH_SECRET=/i\\
+### Secrets ###\\
+APP_SECRET=$jwt_secret\\
+" "$ENV_FILE"
+    echo -e "\033[38;5;244m  ✓ Added APP_SECRET (value copied from JWT_AUTH_SECRET)\033[0m"
+
+    # Legacy vars are kept until the running panel is confirmed v3
+    # (harmless for v3, still required if the pulled image is v2)
+    sed -i "s|^### JWT ###$|### JWT (legacy, panel v2 only — removed automatically after v3 upgrade) ###|" "$ENV_FILE"
+
+    echo -e "\033[1;32m🎉 v3.0.0 .env migration completed!\033[0m"
+}
+
+# Light check: transitional state (APP_SECRET added, legacy vars still present)
+check_env_v3_has_legacy_vars() {
+    if [ ! -f "$ENV_FILE" ]; then
+        return 1
+    fi
+
+    # Only after APP_SECRET is in place
+    if ! grep -q "^APP_SECRET=" "$ENV_FILE" 2>/dev/null; then
+        return 1
+    fi
+
+    local legacy_vars=(JWT_AUTH_SECRET JWT_API_TOKENS_SECRET SWAGGER_PATH SCALAR_PATH IS_DOCS_ENABLED)
+    local var
+    for var in "${legacy_vars[@]}"; do
+        if grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+check_env_v3_legacy_cleanup_needed() {
+    if ! check_env_v3_has_legacy_vars; then
+        return 1
+    fi
+
+    # Clean up only when the panel is confirmed running v3+, or compose pins backend to 3.x
+    local panel_version
+    panel_version=$(get_panel_version 2>/dev/null)
+    if [ -n "$panel_version" ] && [ "$panel_version" != "unknown" ]; then
+        local major="${panel_version%%.*}"
+        if [ "$major" -ge 3 ] 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    fi
+
+    if grep -qE "image:[[:space:]]*(ghcr\.io/)?remnawave/backend:3" "$COMPOSE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Removes legacy v2 vars. Version gating is the CALLER's responsibility:
+# call either after check_env_v3_legacy_cleanup_needed (running panel is v3),
+# or directly when the just-pulled target image is confirmed v3+.
+cleanup_env_v3_legacy() {
+    if ! check_env_v3_has_legacy_vars; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;36m🧹 Removing legacy v2 variables from .env (panel is on v3)\033[0m"
+
+    local backup_file="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    local legacy_vars=(JWT_AUTH_SECRET JWT_API_TOKENS_SECRET SWAGGER_PATH SCALAR_PATH IS_DOCS_ENABLED)
+    local var
+    for var in "${legacy_vars[@]}"; do
+        if grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
+            sed -i "/^${var}=/d" "$ENV_FILE"
+            echo -e "\033[38;5;244m  ✓ Removed: $var\033[0m"
+        fi
+    done
+
+    # Drop now-empty section headers
+    sed -i "/^### JWT (legacy, panel v2 only — removed automatically after v3 upgrade) ###$/d" "$ENV_FILE"
+    sed -i "/^### JWT ###$/d" "$ENV_FILE"
+    sed -i "/^### CHANGE DEFAULT VALUES ###$/d" "$ENV_FILE"
+    sed -i "/^### SWAGGER ###$/d" "$ENV_FILE"
+
+    echo -e "\033[1;32m🎉 Legacy v2 variables removed!\033[0m"
+}
+
+check_backend_pinned_v2() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        return 1
+    fi
+
+    # Matches remnawave/backend:2, :2.x.y (but not :2xx or other tags)
+    if grep -qE "image:[[:space:]]*(ghcr\.io/)?remnawave/backend:2(\.[0-9]+)*[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+offer_backend_v3_upgrade() {
+    if ! check_backend_pinned_v2; then
+        return 1
+    fi
+
+    echo
+    echo -e "\033[1;33m⚠️  Your docker-compose.yml pins remnawave/backend to a v2 tag\033[0m"
+    echo -e "\033[38;5;250m   Remnawave v3.0.0 is a major release with breaking API changes.\033[0m"
+    echo -e "\033[38;5;250m   Release notes: https://f.docs.rw/t/topic/354\033[0m"
+    echo -e "\033[38;5;250m   The script can switch the image to remnawave/backend:3 and\033[0m"
+    echo -e "\033[38;5;250m   migrate your .env (APP_SECRET) automatically.\033[0m"
+    echo
+    read -p "Switch backend image to v3 now? (y/N): " -r upgrade_v3
+    if [[ ! $upgrade_v3 =~ ^[Yy]$ ]]; then
+        echo -e "\033[38;5;244m   Staying on v2. Re-run 'sudo $APP_NAME update' when ready to upgrade.\033[0m"
+        return 1
+    fi
+
+    local backup_file="${COMPOSE_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$COMPOSE_FILE" "$backup_file"
+    echo -e "\033[1;32m✅ Backup created: $(basename "$backup_file")\033[0m"
+
+    sed -i -E "s|(image:[[:space:]]*(ghcr\.io/)?remnawave/backend):2(\.[0-9]+)*[[:space:]]*$|\1:3|" "$COMPOSE_FILE"
+    echo -e "\033[1;32m✅ Backend image switched to v3\033[0m"
+    return 0
 }
 
 # ===== END ENV MIGRATION FUNCTIONS =====
@@ -3071,7 +3307,7 @@ verify_restore_integrity() {
         # Проверяем использование latest тега
         if grep -q "ghcr.io/remnawave/backend:latest" "$target_dir/docker-compose.yml" 2>/dev/null; then
             echo -e "\033[1;33m⚠️  WARNING: docker-compose.yml uses 'latest' tag\033[0m"
-            echo -e "\033[38;5;244m   Recommended: Pin to specific version (e.g., remnawave/backend:2.2.19)\033[0m"
+            echo -e "\033[38;5;244m   Recommended: Pin to specific version (e.g., remnawave/backend:3)\033[0m"
             issues+=("using latest tag - version not pinned")
         fi
         
@@ -5818,7 +6054,7 @@ restore_full_from_archive() {
             echo -e "\033[1;37m✅ Recommendations:\033[0m"
             echo -e "\033[38;5;250m   1. Check backup metadata for original panel version\033[0m"
             echo -e "\033[38;5;250m   2. Manually edit docker-compose.yml to pin specific version\033[0m"
-            echo -e "\033[38;5;250m      Example: remnawave/backend:latest → remnawave/backend:2.2.19\033[0m"
+            echo -e "\033[38;5;250m      Example: remnawave/backend:latest → remnawave/backend:3\033[0m"
             echo -e "\033[38;5;250m   3. Or cancel and create new backup with pinned version\033[0m"
             echo
             echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
@@ -6065,10 +6301,10 @@ restore_database_only() {
     echo -e "\033[38;5;244m   After restore, run: \033[38;5;15m$target_app_name console\033[0m"
     echo -e "\033[38;5;244m   Then select: \033[38;5;15m\"Reset superadmin\"\033[0m"
     echo
-    echo -e "\033[38;5;250m   Option 2 - Match Old JWT Secrets:\033[0m"
+    echo -e "\033[38;5;250m   Option 2 - Match Old Secrets:\033[0m"
     echo -e "\033[38;5;244m   Copy these from your OLD .env to NEW .env:\033[0m"
-    echo -e "\033[38;5;244m   • JWT_AUTH_SECRET\033[0m"
-    echo -e "\033[38;5;244m   • JWT_API_TOKENS_SECRET\033[0m"
+    echo -e "\033[38;5;244m   • APP_SECRET (panel v3+)\033[0m"
+    echo -e "\033[38;5;244m   • JWT_AUTH_SECRET + JWT_API_TOKENS_SECRET (panel v2)\033[0m"
     echo
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
     echo
@@ -9329,7 +9565,7 @@ get_admin_token() {
 
 # Create API token for subscription-page
 #
-# Remnawave panel contract for POST /api/tokens (panel v2.x):
+# Remnawave panel contract for POST /api/tokens (unchanged in v2.x and v3.x):
 #   - name          : token name, 2..30 chars (renamed from the legacy "tokenName")
 #   - expiresInDays : REQUIRED integer >= 1 — token lifetime in days
 #   - scopes        : optional string array; defaults to ["*"] (full access).
@@ -9708,9 +9944,9 @@ subpage_restart_command() {
 install_remnawave() {
     mkdir -p "$APP_DIR"
 
-    # Generate random JWT secrets using openssl if available
-    JWT_AUTH_SECRET=$(openssl rand -hex 128)
-    JWT_API_TOKENS_SECRET=$(openssl rand -hex 128)
+    # Generate random app secret using openssl if available
+    # Panel v3.0.0+: single APP_SECRET replaces JWT_AUTH_SECRET / JWT_API_TOKENS_SECRET
+    APP_SECRET=$(openssl rand -hex 128)
 
     # Generate random metrics credentials
     METRICS_USER=$(generate_random_string 12)
@@ -9945,7 +10181,8 @@ install_remnawave() {
     read -p "Enter PANEL_DOMAIN (optional, e.g., panel.example.com): " -r PANEL_DOMAIN
 
     # Determine image tag based on --dev flag
-    BACKEND_IMAGE_TAG="latest"
+    # Pin to major version 3 (matches upstream docker-compose-prod.yml)
+    BACKEND_IMAGE_TAG="3"
     if [ "$USE_DEV_BRANCH" == "true" ]; then
         BACKEND_IMAGE_TAG="dev"
     fi
@@ -9972,10 +10209,8 @@ REDIS_SOCKET=/var/run/valkey/valkey.sock
 #REDIS_HOST=
 #REDIS_PORT=
 
-### JWT ###
-### CHANGE DEFAULT VALUES ###
-JWT_AUTH_SECRET=$JWT_AUTH_SECRET
-JWT_API_TOKENS_SECRET=$JWT_API_TOKENS_SECRET
+### Secrets ###
+APP_SECRET=$APP_SECRET
 
 ### TELEGRAM NOTIFICATIONS ###
 IS_TELEGRAM_NOTIFICATIONS_ENABLED=$IS_TELEGRAM_NOTIFICATIONS_ENABLED
@@ -10018,11 +10253,6 @@ SUB_PUBLIC_DOMAIN=$SUB_PUBLIC_DOMAIN
 
 ### If CUSTOM_SUB_PREFIX is set in @remnawave/subscription-page, append the same path to SUB_PUBLIC_DOMAIN. Example: SUB_PUBLIC_DOMAIN=sub-page.example.com/sub
 
-### SWAGGER ###
-SWAGGER_PATH=/docs
-SCALAR_PATH=/scalar
-IS_DOCS_ENABLED=false
-
 ### PROMETHEUS ###
 ### Metrics are available at http://127.0.0.1:METRICS_PORT/metrics
 METRICS_USER=$METRICS_USER
@@ -10045,26 +10275,30 @@ BANDWIDTH_USAGE_NOTIFICATIONS_THRESHOLD=[60, 80]
 
 ### Not connected users notification (webhook, telegram)
 NOT_CONNECTED_USERS_NOTIFICATIONS_ENABLED=false
-# Only in ASC order (example: [6, 12, 24]), must be valid array of integer(min: 1, max: 168) numbers. No more than 3 values.
+# Only in ASC order (example: [6, 12, 24]), must be valid array of integer(min: 1, max: 744) numbers. No more than 3 values.
 # Each value represents HOURS passed after user creation (user.createdAt)
 NOT_CONNECTED_USERS_NOTIFICATIONS_AFTER_HOURS=[6, 24, 48]
 
-### EXPIRATION NOTIFICATIONS (panel v2.8.0+) ###
-# Since v2.8.0 the old per-threshold expiration events are disabled by default and
-# consolidated into a single "user.expiration" event. Uncomment to restore old behavior.
-# Requires at least one channel: IS_TELEGRAM_NOTIFICATIONS_ENABLED=true OR WEBHOOK_ENABLED=true.
-# Array of integers -168..168 (no 0), max 5 negative + 5 positive values, sorted ascending.
-#EXPIRATION_NOTIFICATIONS_ENABLED=true
-#EXPIRATION_NOTIFICATIONS=[-72, -48, -24, 24]
+### Expiration notifications (webhook, telegram)
+EXPIRATION_NOTIFICATIONS_ENABLED=false
+# Only in ASC order (example: [-72, -48, -24, 24]), must be valid array of non-zero integer numbers.
+# Each value represents HOURS relative to user expiration (user.expireAt):
+#   negative = BEFORE expiration (user expires in N hours), positive = AFTER expiration (user expired N hours ago).
+# Range: from -744 to 744 (0 is not allowed). No more than 5 values per side (max 5 negative and 5 positive).
+EXPIRATION_NOTIFICATIONS=[-72, -48, -24, 24]
 
 ### SUBSCRIPTION REQUEST HISTORY (panel v2.8.0+) ###
 # Set to true to disable logging of subscription request history (SRH) records.
 SERVICE_DISABLE_SRH_RECORDS=false
 
-### CLOUDFLARE ###
-# USED ONLY FOR docker-compose-prod-with-cf.yml
-# NOT USED BY THE APP ITSELF
-CLOUDFLARE_TOKEN=ey...
+### Export to Redis Streams (panel v3.0.0+) ###
+# Publishes panel events to Redis Streams for external consumers (e.g. ClickHouse via a worker or Vector):
+#   "ioraw:export:user_usage" — per-node user traffic deltas
+#   "ioraw:export:subscription_requests" — subscription fetches
+#   "ioraw:export:node_connections" — per-node connection snapshots (retention 1h)
+EXPORT_TO_STREAM_ENABLED=false
+# Approximate max number of messages kept in the stream (MAXLEN ~). Oldest messages are trimmed when consumers lag behind.
+EXPORT_TO_STREAM_MAXLEN=3000
 
 ### Database ###
 ### For Postgres Docker container ###
@@ -10122,9 +10356,10 @@ x-env: &env
 
 services:
     remnawave-db:
-        image: postgres:17.6
+        image: postgres:18.4
         container_name: '${APP_NAME}-db'
         hostname: ${APP_NAME}-db
+        shm_size: 512mb
         <<: [*common, *logging, *env]
         environment:
             - POSTGRES_USER=\${POSTGRES_USER}
@@ -10134,7 +10369,7 @@ services:
         ports:
             - '127.0.0.1:6767:5432'
         volumes:
-            - ${APP_NAME}-db-data:/var/lib/postgresql/data
+            - ${APP_NAME}-db-data:/var/lib/postgresql
         healthcheck:
             test: ['CMD-SHELL', 'pg_isready -U \$\${POSTGRES_USER} -d \$\${POSTGRES_DB}']
             interval: 3s
@@ -11907,13 +12142,20 @@ health_check_command() {
         echo -e "\033[1;32m✅ Environment file exists\033[0m"
         
         # Проверка обязательных переменных
-        local required_vars=("APP_PORT" "JWT_AUTH_SECRET" "JWT_API_TOKENS_SECRET" "POSTGRES_USER" "POSTGRES_PASSWORD" "POSTGRES_DB")
+        local required_vars=("APP_PORT" "POSTGRES_USER" "POSTGRES_PASSWORD" "POSTGRES_DB")
         for var in "${required_vars[@]}"; do
             if ! grep -q "^${var}=" "$ENV_FILE"; then
                 echo -e "\033[1;31m❌ Missing required variable: $var\033[0m"
                 issues=$((issues + 1))
             fi
         done
+
+        # Secret: APP_SECRET (panel v3+) or JWT_AUTH_SECRET + JWT_API_TOKENS_SECRET (panel v2)
+        if ! grep -q "^APP_SECRET=" "$ENV_FILE" && \
+           ! { grep -q "^JWT_AUTH_SECRET=" "$ENV_FILE" && grep -q "^JWT_API_TOKENS_SECRET=" "$ENV_FILE"; }; then
+            echo -e "\033[1;31m❌ Missing required variable: APP_SECRET (v3) or JWT_AUTH_SECRET/JWT_API_TOKENS_SECRET (v2)\033[0m"
+            issues=$((issues + 1))
+        fi
     fi
     
     if [ ! -f "$COMPOSE_FILE" ]; then
@@ -12772,6 +13014,11 @@ update_command() {
         has_compose_v588_migration=true
     fi
 
+    # Panel v3.0.0: offer switching pinned v2 backend image to v3
+    if offer_backend_v3_upgrade; then
+        images_need_update=true
+    fi
+
     # Если нет обновлений образов
     if [ "$images_need_update" = false ]; then
         echo
@@ -12809,6 +13056,11 @@ update_command() {
         fi
         if [ "$has_compose_v588_migration" = true ]; then
             migrate_compose_v588
+        fi
+
+        # v3.0.0: очистка legacy-переменных (только если панель уже работает на v3)
+        if check_env_v3_legacy_cleanup_needed; then
+            cleanup_env_v3_legacy
         fi
 
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
@@ -12875,6 +13127,28 @@ update_command() {
         migrate_compose_v588
         env_migrated=true
     fi
+    # v3.0.0 .env migration (APP_SECRET replaces JWT secrets) — version-checked:
+    # runs only when the just-pulled backend image is confirmed v3+
+    if check_env_v3_migration_needed; then
+        local target_backend_major
+        target_backend_major=$(get_target_backend_major)
+        if [ "$target_backend_major" != "unknown" ] && [ "$target_backend_major" -ge 3 ] 2>/dev/null; then
+            echo -e "\033[38;5;244m   Pulled backend image is v${target_backend_major}.x — migrating .env to v3 format\033[0m"
+            migrate_env_v3
+            cleanup_env_v3_legacy
+            env_migrated=true
+        elif [ "$target_backend_major" = "unknown" ]; then
+            # Target version undetectable — add APP_SECRET but keep legacy vars
+            # (extra vars are harmless for both v2 and v3)
+            echo -e "\033[1;33m   ⚠️  Could not detect target backend version — applying safe transitional migration\033[0m"
+            migrate_env_v3
+            echo -e "\033[38;5;250m   Legacy JWT_* variables kept for now; they will be removed\033[0m"
+            echo -e "\033[38;5;250m   automatically once the panel is confirmed running v3.\033[0m"
+            env_migrated=true
+        else
+            echo -e "\033[38;5;244m   Backend stays on v${target_backend_major}.x — .env migration not needed\033[0m"
+        fi
+    fi
     if [ "$env_migrated" = false ]; then
         echo -e "\033[38;5;244m   Environment is clean\033[0m"
     fi
@@ -12909,7 +13183,12 @@ update_command() {
             echo -e "\033[38;5;8m   Check status with '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
         fi
     done
-    
+
+    # v3.0.0: once the panel is confirmed running v3, drop legacy v2 variables
+    if check_env_v3_legacy_cleanup_needed; then
+        cleanup_env_v3_legacy
+    fi
+
     # === Итог ===
     echo
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
