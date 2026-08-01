@@ -141,7 +141,7 @@ sudo wtm test
 ├── 🌐 Прямое подключение (проверка базового интернета)
 ├── 📡 WARP тестирование
 │   ├── WireGuard интерфейс (wg show warp)
-│   ├── Cloudflare trace (warp=on проверка)
+│   ├── Cloudflare trace (warp=on/plus проверка)
 │   └── Сравнение IP адресов
 └── 🧅 Tor тестирование
     ├── SOCKS5 порт 9050 (доступность)

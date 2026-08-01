@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WARP & Tor Network Setup Script
 # This script installs and manages Cloudflare WARP and Tor connections
-# VERSION=1.5.1
+# VERSION=1.5.2
 
 # NB: this is an interactive, status-returning menu script. We deliberately do
 # NOT use `set -e` (errexit): many functions return non-zero as a normal status
@@ -9,7 +9,7 @@
 # break the menu loop. We keep `set -E` (errtrace) so the ERR trap below can
 # surface genuinely unexpected failures for diagnostics without exiting.
 set -E
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.5.2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Error handler for debugging (diagnostic only — never exits)
@@ -1174,7 +1174,8 @@ check_ipv6_support() {
 }
 
 verify_warp_connection() {
-    curl -s --max-time 10 --interface warp https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "warp=on"
+    # WARP+ accounts report warp=plus, free accounts warp=on
+    curl -s --max-time 10 --interface warp https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -qE 'warp=(on|plus)'
 }
 
 uninstall_warp() {
@@ -2346,11 +2347,14 @@ test_connections() {
         # Проверяем Cloudflare trace
         local trace_result=$(curl -s --max-time 10 --interface warp https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep "warp=" || echo "warp=off")
         local warp_enabled=$(echo "$trace_result" | cut -d'=' -f2)
-        if [ "$warp_enabled" = "on" ]; then
-            printf "   \033[38;5;15m%-12s\033[0m \033[1;32m✅ Verified by Cloudflare\033[0m\n" "CF Trace:"
-        else
-            printf "   \033[38;5;15m%-12s\033[0m \033[1;33m⚠️  Not detected by CF\033[0m\n" "CF Trace:"
-        fi
+        case "$warp_enabled" in
+            on)
+                printf "   \033[38;5;15m%-12s\033[0m \033[1;32m✅ Verified by Cloudflare\033[0m\n" "CF Trace:" ;;
+            plus)
+                printf "   \033[38;5;15m%-12s\033[0m \033[1;32m✅ Verified by Cloudflare (WARP+)\033[0m\n" "CF Trace:" ;;
+            *)
+                printf "   \033[38;5;15m%-12s\033[0m \033[1;33m⚠️  Not detected by CF\033[0m\n" "CF Trace:" ;;
+        esac
     else
         printf "   \033[38;5;15m%-12s\033[0m \033[38;5;244m📦 Service not running\033[0m\n" "Status:"
     fi
