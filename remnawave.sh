@@ -2510,7 +2510,9 @@ get_db_service_name() {
     local svc
     svc=$(docker compose config --services 2>/dev/null | grep -E -- '-db$' | head -1)
     if [ -z "$svc" ]; then
-        svc=$(grep -E '^\s{2,4}[a-zA-Z0-9_-]+-db:' docker-compose.yml 2>/dev/null | head -1 | tr -d ' :')
+        # POSIX class, not \s: the latter is a GNU extension and silently fails
+        # on BSD/other greps, leaving the fallback useless
+        svc=$(grep -E '^[[:space:]]{2,4}[a-zA-Z0-9_-]+-db:' docker-compose.yml 2>/dev/null | head -1 | tr -d ' :')
     fi
     [ -z "$svc" ] && svc="remnawave-db"
     echo "$svc"
@@ -2971,10 +2973,12 @@ create_safety_backup() {
             local postgres_db="postgres"
             
             # Читаем настройки из .env если доступны
+            # (-f2- не обрезает пароли со знаком '='; кавычки срезаем)
             if [ -f "$target_dir/.env" ]; then
-                postgres_user=$(grep "^POSTGRES_USER=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-                postgres_password=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-                postgres_db=$(grep "^POSTGRES_DB=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
+                local env_val
+                env_val=$(grep "^POSTGRES_USER=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_user="$env_val"
+                env_val=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_password="$env_val"
+                env_val=$(grep "^POSTGRES_DB=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_db="$env_val"
             fi
             
             if docker exec -e PGPASSWORD="$postgres_password" "$db_container" \
