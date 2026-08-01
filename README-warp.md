@@ -55,7 +55,7 @@
 sudo bash <(curl -sL https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
 
 # Или сразу к делу — wtm установится глобально сам при любой install-команде
-sudo bash <(curl -sL https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) install-all
+sudo bash <(curl -sL https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-all
 ```
 
 После этого — `sudo wtm` для интерактивного меню, либо команды напрямую:

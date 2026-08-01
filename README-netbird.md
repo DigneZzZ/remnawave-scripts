@@ -70,15 +70,15 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 
 ```bash
 # Auto-install with SSH access between servers
-bash <(curl -Ls .../netbird.sh) init --key ABC123-DEF456 --ssh
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
 
 # CLI install with auto-accept (no prompts)
-bash <(curl -Ls .../netbird.sh) install --key ABC123-DEF456 --force
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --force
 
 # Update / status / with logging
-bash <(curl -Ls .../netbird.sh) update
-bash <(curl -Ls .../netbird.sh) status
-bash <(curl -Ls .../netbird.sh) install --key KEY --log /var/log/netbird-install.log
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) update
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key KEY --log /var/log/netbird-install.log
 ```
 
 </details>
@@ -180,15 +180,15 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.s
 
 ```bash
 # Автоустановка с SSH-доступом между серверами
-bash <(curl -Ls .../netbird.sh) init --key ABC123-DEF456 --ssh
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ABC123-DEF456 --ssh
 
 # CLI-установка без запросов
-bash <(curl -Ls .../netbird.sh) install --key ABC123-DEF456 --force
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ABC123-DEF456 --force
 
 # Обновление / статус / с логированием
-bash <(curl -Ls .../netbird.sh) update
-bash <(curl -Ls .../netbird.sh) status
-bash <(curl -Ls .../netbird.sh) install --key KEY --log /var/log/netbird-install.log
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) update
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) status
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key KEY --log /var/log/netbird-install.log
 ```
 
 </details>
