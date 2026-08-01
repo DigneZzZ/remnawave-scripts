@@ -69,6 +69,7 @@ remnawave backup       # manual backup (or `schedule` for cron)
 | `up` / `down` / `restart` / `status` / `logs` | Service lifecycle |
 | `update` | Update script and containers with migrations |
 | `backup` / `restore` / `schedule` | Backups: manual, restore, cron |
+| `upgrade-postgres` | Optional PostgreSQL 17 → 18 upgrade (dump → fresh volume → restore, with rollback) |
 | `edit` / `edit-env` / `console` | compose, .env, panel console |
 | `subpage` / `subpage-token` / `subpage-restart` | Subscription-page management |
 | `install-subpage-standalone --with-caddy` | Subpage on a separate server |
