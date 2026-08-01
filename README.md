@@ -45,7 +45,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 
 ## 🚀 Remnawave Panel
 
-<div align="center"><img src="assets/preview-remnawave.svg" alt="remnawave menu" width="720"></div>
+<div align="center"><img src="assets/preview-remnawave.svg" alt="remnawave menu" width="640"></div>
 
 - **Turnkey install** — `.env`, secrets, ports, compose, and the admin account are generated automatically (credentials in `admin-credentials.txt`)
 - **Caddy reverse proxy** — auto-SSL, optional authentication portal with MFA (Caddy Security)
@@ -91,7 +91,7 @@ remnawave backup       # manual backup (or `schedule` for cron)
 
 ## 🛰 RemnaNode
 
-<div align="center"><img src="assets/preview-remnanode.svg" alt="remnanode menu" width="720"></div>
+<div align="center"><img src="assets/preview-remnanode.svg" alt="remnanode menu" width="640"></div>
 
 - **Xray-core** — install and update from the menu, pre-releases included; real-time Xray logs
 - **Non-interactive mode** — `--force --secret-key="KEY"` for mass provisioning
@@ -135,7 +135,7 @@ remnanode xray_log_err    # real-time Xray errors
 
 ## 🎭 Caddy Selfsteal
 
-<div align="center"><img src="assets/preview-selfsteal.svg" alt="selfsteal menu" width="720"></div>
+<div align="center"><img src="assets/preview-selfsteal.svg" alt="selfsteal menu" width="640"></div>
 
 - **8 website templates** for camouflage: social, converters, file clouds, speedtest, and more
 - **Anti-fingerprint** — every template is uniquified on install (no byte-identical copies), provenance traces stripped
@@ -157,7 +157,7 @@ Details (HTTP/3, `--no-randomize`, structure): **[README-selfsteal.md](./README-
 
 ## 🌐 WTM — WARP & Tor Manager
 
-<div align="center"><img src="assets/preview-wtm.svg" alt="wtm menu" width="720"></div>
+<div align="center"><img src="assets/preview-wtm.svg" alt="wtm menu" width="640"></div>
 
 - **WARP** as a native WireGuard outbound for Xray (no TUN interface) + **WARP+** support
 - **Tor** SOCKS5 proxy and `.onion` routing through Xray

@@ -45,7 +45,7 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal
 
 ## 🚀 Remnawave Panel
 
-<div align="center"><img src="assets/preview-remnawave.svg" alt="Меню remnawave" width="720"></div>
+<div align="center"><img src="assets/preview-remnawave.svg" alt="Меню remnawave" width="640"></div>
 
 - **Установка под ключ** — `.env`, секреты, порты, compose и админ создаются автоматически (креды в `admin-credentials.txt`)
 - **Caddy reverse proxy** — авто-SSL, опционально портал аутентификации с MFA (Caddy Security)
@@ -91,7 +91,7 @@ remnawave backup       # бэкап вручную (или `schedule` — по �
 
 ## 🛰 RemnaNode
 
-<div align="center"><img src="assets/preview-remnanode.svg" alt="Меню remnanode" width="720"></div>
+<div align="center"><img src="assets/preview-remnanode.svg" alt="Меню remnanode" width="640"></div>
 
 - **Xray-core** — установка и обновление из меню, включая pre-release; логи Xray в реальном времени
 - **Неинтерактивный режим** — `--force --secret-key="KEY"` для массового развёртывания
@@ -135,7 +135,7 @@ remnanode xray_log_err    # ошибки Xray в реальном времени
 
 ## 🎭 Caddy Selfsteal
 
-<div align="center"><img src="assets/preview-selfsteal.svg" alt="Меню selfsteal" width="720"></div>
+<div align="center"><img src="assets/preview-selfsteal.svg" alt="Меню selfsteal" width="640"></div>
 
 - **8 шаблонов сайтов** для камуфляжа: соцсети, конвертеры, файлообменники, спидтест и др.
 - **Антифингерпринт** — каждый шаблон уникализируется при установке (нет байт-в-байт совпадений), следы происхождения вырезаются
@@ -157,7 +157,7 @@ selfsteal template install converter    # установить шаблон
 
 ## 🌐 WTM — WARP & Tor Manager
 
-<div align="center"><img src="assets/preview-wtm.svg" alt="Меню wtm" width="720"></div>
+<div align="center"><img src="assets/preview-wtm.svg" alt="Меню wtm" width="640"></div>
 
 - **WARP** как нативный WireGuard-outbound для Xray (без TUN-интерфейса) + поддержка **WARP+**
 - **Tor** SOCKS5-прокси и маршрутизация `.onion` через Xray
