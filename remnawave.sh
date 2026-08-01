@@ -13151,6 +13151,14 @@ upgrade_postgres_command() {
 
     cd "$APP_DIR" || { echo -e "\033[1;31m❌ Cannot access $APP_DIR\033[0m"; exit 1; }
 
+    # DB credentials are needed for readiness checks, the dump and the import
+    local pg_user="postgres" pg_pass="postgres" pg_db="postgres" v
+    if [ -f "$ENV_FILE" ]; then
+        v=$(grep "^POSTGRES_USER=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_user="$v"
+        v=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_pass="$v"
+        v=$(grep "^POSTGRES_DB=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_db="$v"
+    fi
+
     # --- Step 1: make sure the OLD database is running so we can dump it -------
     echo
     echo -e "\033[38;5;250m📝 Step 1:\033[0m Starting the current database..."
@@ -13160,7 +13168,7 @@ upgrade_postgres_command() {
 
     local attempts=0
     while [ $attempts -lt 60 ]; do
-        if docker exec "$db_container" pg_isready >/dev/null 2>&1; then
+        if docker exec "$db_container" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
             break
         fi
         sleep 1
@@ -13177,12 +13185,6 @@ upgrade_postgres_command() {
     ts=$(date +%Y%m%d_%H%M%S)
     backup_dir="$APP_DIR/backups/pre-pg${current_major}-to-pg${PG_TARGET_MAJOR}-$ts"
     mkdir -p "$backup_dir"
-
-    local pg_user="postgres" pg_pass="postgres" v
-    if [ -f "$ENV_FILE" ]; then
-        v=$(grep "^POSTGRES_USER=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_user="$v"
-        v=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_pass="$v"
-    fi
 
     echo -e "\033[38;5;250m📝 Step 2:\033[0m Creating full cluster dump (pg_dumpall)..."
     local dump_file="$backup_dir/cluster.sql"
@@ -13247,7 +13249,7 @@ upgrade_postgres_command() {
 
     attempts=0
     while [ $attempts -lt 90 ]; do
-        if docker exec "$db_container" pg_isready >/dev/null 2>&1; then
+        if docker exec "$db_container" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
             break
         fi
         sleep 1
@@ -13282,18 +13284,36 @@ upgrade_postgres_command() {
     echo -e "\033[38;5;250m📝 Step 6:\033[0m Starting all services..."
     $COMPOSE -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
 
+    # Check the PANEL container specifically. is_remnawave_up() only asks whether
+    # any compose container is running — the DB alone would satisfy it and we'd
+    # print success even if the panel never came back.
+    local panel_state=""
     attempts=0
-    while [ $attempts -lt 30 ]; do
-        sleep 2
-        if is_remnawave_up; then
+    while [ $attempts -lt 45 ]; do
+        panel_state=$(docker inspect "$APP_NAME" \
+            --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null)
+        if [ "$panel_state" = "healthy" ] || [ "$panel_state" = "running" ]; then
             break
         fi
+        sleep 2
         attempts=$((attempts + 1))
     done
+
+    if [ "$panel_state" != "healthy" ] && [ "$panel_state" != "running" ]; then
+        echo
+        echo -e "\033[1;31m❌ Database upgraded, but the panel container did not come up (state: ${panel_state:-unknown})\033[0m"
+        echo -e "\033[38;5;244m   Logs:      sudo $APP_NAME logs\033[0m"
+        echo -e "\033[38;5;244m   Dump/cfg:  $backup_dir\033[0m"
+        [ -n "$backup_volume" ] && echo -e "\033[38;5;244m   Old data:  volume '$backup_volume' (kept for rollback)\033[0m"
+        echo -e "\033[38;5;244m   The data import itself was verified ($table_count tables).\033[0m"
+        log_restore_operation "PG Upgrade" "WARNING" "DB upgraded but panel did not start (state: ${panel_state:-unknown})"
+        exit 1
+    fi
 
     echo
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
     echo -e "\033[1;32m🎉 PostgreSQL upgraded: $current_major → $PG_TARGET_MAJOR\033[0m"
+    echo -e "\033[38;5;250m   Panel container: $panel_state\033[0m"
     echo -e "\033[38;5;250m   Dump & old config: $backup_dir\033[0m"
     if [ -n "$backup_volume" ]; then
         echo -e "\033[38;5;250m   Old data volume:   $backup_volume\033[0m"
