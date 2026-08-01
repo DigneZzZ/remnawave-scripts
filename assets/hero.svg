@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="240" viewBox="0 0 880 240" role="img" aria-label="Remnawave Scripts">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d1117"/><stop offset="1" stop-color="#161b3a"/></linearGradient><linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#58a6ff"/><stop offset="0.5" stop-color="#bc8cff"/><stop offset="1" stop-color="#39c5cf"/></linearGradient></defs>
+<rect x="0.5" y="0.5" width="879" height="239" rx="14" fill="url(#bg)" stroke="#30363d"/>
+<circle cx="40" cy="30" r="1" fill="#21262d"/>
+<circle cx="40" cy="85" r="1" fill="#21262d"/>
+<circle cx="40" cy="140" r="1" fill="#21262d"/>
+<circle cx="40" cy="195" r="1" fill="#21262d"/>
+<circle cx="100" cy="30" r="1" fill="#21262d"/>
+<circle cx="100" cy="85" r="1" fill="#21262d"/>
+<circle cx="100" cy="140" r="1" fill="#21262d"/>
+<circle cx="100" cy="195" r="1" fill="#21262d"/>
+<circle cx="160" cy="30" r="1" fill="#21262d"/>
+<circle cx="160" cy="85" r="1" fill="#21262d"/>
+<circle cx="160" cy="140" r="1" fill="#21262d"/>
+<circle cx="160" cy="195" r="1" fill="#21262d"/>
+<circle cx="220" cy="30" r="1" fill="#21262d"/>
+<circle cx="220" cy="85" r="1" fill="#21262d"/>
+<circle cx="220" cy="140" r="1" fill="#21262d"/>
+<circle cx="220" cy="195" r="1" fill="#21262d"/>
+<circle cx="280" cy="30" r="1" fill="#21262d"/>
+<circle cx="280" cy="85" r="1" fill="#21262d"/>
+<circle cx="280" cy="140" r="1" fill="#21262d"/>
+<circle cx="280" cy="195" r="1" fill="#21262d"/>
+<circle cx="340" cy="30" r="1" fill="#21262d"/>
+<circle cx="340" cy="85" r="1" fill="#21262d"/>
+<circle cx="340" cy="140" r="1" fill="#21262d"/>
+<circle cx="340" cy="195" r="1" fill="#21262d"/>
+<circle cx="400" cy="30" r="1" fill="#21262d"/>
+<circle cx="400" cy="85" r="1" fill="#21262d"/>
+<circle cx="400" cy="140" r="1" fill="#21262d"/>
+<circle cx="400" cy="195" r="1" fill="#21262d"/>
+<circle cx="460" cy="30" r="1" fill="#21262d"/>
+<circle cx="460" cy="85" r="1" fill="#21262d"/>
+<circle cx="460" cy="140" r="1" fill="#21262d"/>
+<circle cx="460" cy="195" r="1" fill="#21262d"/>
+<circle cx="520" cy="30" r="1" fill="#21262d"/>
+<circle cx="520" cy="85" r="1" fill="#21262d"/>
+<circle cx="520" cy="140" r="1" fill="#21262d"/>
+<circle cx="520" cy="195" r="1" fill="#21262d"/>
+<circle cx="580" cy="30" r="1" fill="#21262d"/>
+<circle cx="580" cy="85" r="1" fill="#21262d"/>
+<circle cx="580" cy="140" r="1" fill="#21262d"/>
+<circle cx="580" cy="195" r="1" fill="#21262d"/>
+<circle cx="640" cy="30" r="1" fill="#21262d"/>
+<circle cx="640" cy="85" r="1" fill="#21262d"/>
+<circle cx="640" cy="140" r="1" fill="#21262d"/>
+<circle cx="640" cy="195" r="1" fill="#21262d"/>
+<circle cx="700" cy="30" r="1" fill="#21262d"/>
+<circle cx="700" cy="85" r="1" fill="#21262d"/>
+<circle cx="700" cy="140" r="1" fill="#21262d"/>
+<circle cx="700" cy="195" r="1" fill="#21262d"/>
+<circle cx="760" cy="30" r="1" fill="#21262d"/>
+<circle cx="760" cy="85" r="1" fill="#21262d"/>
+<circle cx="760" cy="140" r="1" fill="#21262d"/>
+<circle cx="760" cy="195" r="1" fill="#21262d"/>
+<circle cx="820" cy="30" r="1" fill="#21262d"/>
+<circle cx="820" cy="85" r="1" fill="#21262d"/>
+<circle cx="820" cy="140" r="1" fill="#21262d"/>
+<circle cx="820" cy="195" r="1" fill="#21262d"/>
+<text x="440" y="92" text-anchor="middle" font-family="-apple-system, 'Segoe UI', system-ui, sans-serif" font-size="44" font-weight="800" fill="#e6edf3">Remnawave <tspan fill="url(#accent)">Scripts</tspan></text>
+<text x="440" y="128" text-anchor="middle" font-family="-apple-system, 'Segoe UI', system-ui, sans-serif" font-size="17" fill="#8b949e">Panel · Node · Reality Masking · WARP &amp; Tor · Backups — one-liner installs, full-featured CLI</text>
+<rect x="125" y="156" width="630" height="44" rx="8" fill="#0d1117" stroke="#30363d"/>
+<text x="440" y="184" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14.5" xml:space="preserve"><tspan fill="#3fb950" font-weight="600">$</tspan><tspan fill="#e6edf3"> bash &lt;(curl -Ls …/raw/main/remnawave.sh) </tspan><tspan fill="#58a6ff">@</tspan><tspan fill="#e6edf3"> install</tspan><tspan fill="#3fb950"> ▊</tspan></text>
+</svg>

@@ -1,19 +1,22 @@
-# Remnawave Scripts
+<div align="center">
+
+<img src="assets/hero.svg" alt="Remnawave Scripts" width="880">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![Version](https://img.shields.io/badge/version-6.3.0-blue.svg)](#)
-[![Localization](https://img.shields.io/badge/🌐_Languages-EN_|_RU-green.svg)](#)
+[![Version](https://img.shields.io/badge/remnawave.sh-6.4.0-blue.svg)](#)
+[![Panel v3](https://img.shields.io/badge/Remnawave_Panel-v3_ready-brightgreen.svg)](#)
+[![Localization](https://img.shields.io/badge/🌐-EN_|_RU-green.svg)](./README_RU.md)
 
-![remnawave-script](remnawave-script.webp)
+**[Русский](./README_RU.md)** · **[Quick Start](#-quick-start)** · **[Scripts](#-scripts)** · **[Backups](#-backups--migration)** · **[Support](https://gig.ovh/t/remnawave-managment-scripts-by-dignezzz/116)**
 
-> **TL;DR:** One-liner scripts to deploy and manage **Remnawave Panel**, **RemnaNode**, and **Reality traffic masking** via Docker. Includes backup/restore, Telegram notifications, Caddy reverse proxy, and bilingual CLI (EN/RU).
+</div>
 
-**[📖 Readme на русском](/README_RU.md)** · **[💬 Support](https://gig.ovh/t/remnawave-managment-scripts-by-dignezzz/116)**
+One-liner installs and a full-featured CLI for **Remnawave Panel**, **RemnaNode**, **Reality masking**, **WARP/Tor**, and enterprise-grade backups. Docker-based, bilingual UI (EN/RU), idempotent operations, self-updates.
 
----
+> 🆕 **Remnawave Panel v3.0.0 supported out of the box.** Fresh installs get v3 config right away, and `remnawave update` migrates your `.env` from v2 automatically — with target image version checking and a backup of every file it touches.
 
-## 🚀 Quick Start
+## ⚡ Quick Start
 
 ```bash
 # Remnawave Panel
@@ -22,209 +25,64 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave
 # RemnaNode
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
 
-# Caddy Selfsteal (Reality masking)
+# Caddy Selfsteal — Reality masking
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ install
 ```
 
-After installation, manage services with: `remnawave`, `remnanode`, or `selfsteal` commands.
+After installation each script is a global command: `remnawave`, `remnanode`, `selfsteal` — run without arguments to open the interactive menu.
 
----
+## 📦 Scripts
 
-## 📦 What's Included
-
-| Script | Purpose | Install Command |
-|--------|---------|----------------|
-| **remnawave.sh** | Panel installer & manager | `remnawave <command>` |
-| **remnanode.sh** | Node installer & manager | `remnanode <command>` |
-| **selfsteal.sh** | Reality traffic masking | `selfsteal <command>` |
-| **wtm.sh** | WARP & Tor Manager | `wtm <command>` |
-| **netbird.sh** | NetBird VPN installer | `netbird.sh <command>` |
-
-**Key features across all scripts:** auto-updates, interactive menus, bilingual interface (EN/RU), Docker Compose v2, idempotent operations.
+| Script | Purpose | Docs |
+|---|---|---|
+| 🚀 **remnawave.sh** | Panel: install, Caddy, backups, subscription-page | this file |
+| 🛰 **remnanode.sh** | Node: Xray-core, logs, auto-restart | this file |
+| 🎭 **selfsteal.sh** | Caddy masking for Reality, 8 website templates | [README-selfsteal](./README-selfsteal.md) |
+| 🌐 **wtm.sh** | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
+| 🐦 **netbird.sh** | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
 ---
 
 ## 🚀 Remnawave Panel
 
-Full installer and manager for [Remnawave Panel](https://github.com/remnawave/) with backup/restore, Caddy proxy, Telegram integration, and subscription page management.
+<div align="center"><img src="assets/preview-remnawave.svg" alt="remnawave menu" width="720"></div>
 
-### Installation
+- **Turnkey install** — `.env`, secrets, ports, compose, and the admin account are generated automatically (credentials in `admin-credentials.txt`)
+- **Caddy reverse proxy** — auto-SSL, optional authentication portal with MFA (Caddy Security)
+- **Subscription-page** — alongside the panel or standalone on a separate server; API token created automatically with least-privilege scopes
+- **Safe `update`** — DB + config snapshot before every update, plus automatic migrations (including v2 → v3)
+- **Telegram** — notifications and backup delivery, thread and proxy support
 
 ```bash
-# Standard install
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install
-
-# With options
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name panel-prod --dev
+remnawave              # interactive menu
+remnawave update       # update script, images, run migrations
+remnawave backup       # manual backup (or `schedule` for cron)
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--name NAME` | Custom installation directory name |
-| `--dev` | Install development version |
-
-### Commands
-
 <details>
-<summary><b>📋 All Panel Commands</b></summary>
+<summary><b>📋 CLI commands & install flags</b></summary>
 
 | Command | Description |
-|---------|-------------|
-| `install` | Install Remnawave Panel |
-| `install-script` | Install management script only |
-| `update` | Update script and containers |
-| `uninstall` | Remove panel completely |
-| `up` / `down` / `restart` | Service lifecycle |
-| `status` | Show service status |
-| `logs` | View container logs (`--follow`) |
-| `edit` | Edit docker-compose.yml |
-| `edit-env` | Edit .env file |
-| `console` | Access panel CLI console |
-| `backup` | Create backup (`--data-only`, `--no-compress`) |
-| `restore` | Restore from backup (`--file FILE`, `--database-only`) |
-| `schedule` | Manage scheduled backups |
-| `subpage` | Subscription page settings |
-| `subpage-token` | Configure API token |
-| `subpage-restart` | Restart subscription-page |
-| `install-subpage` | Install subscription-page only |
-| `install-subpage-standalone` | Install subpage on separate server (`--with-caddy`) |
-| `caddy` / `caddy up` / `caddy down` | Caddy management |
-| `caddy logs` / `caddy edit` | Caddy logs & config |
-| `caddy restart` / `caddy uninstall` | Caddy lifecycle |
-| `caddy reset-user` | Reset Caddy admin password |
-
-</details>
-
-### Highlights
-
-- **Auto-generation** of `.env`, secrets, ports, `docker-compose.yml`
-- **Admin auto-creation** — credentials saved to `admin-credentials.txt`
-- **Caddy Reverse Proxy** — Simple mode (auto SSL) or Secure mode (auth portal + MFA)
-- **Backup system** — full/DB-only backups, cron scheduling, Telegram delivery, version-aware restore → see [💾 Backup, Restore & Migration](#-backup-restore--migration)
-- **Safe updates** — automatic DB + config snapshot before every `update`, plus deprecated env-var migration (v2.2.0+)
-- **Subscription-page token** — auto-created with least-privilege scopes and a configurable lifetime (Remnawave panel v2.8.0+)
-
-<details>
-<summary><b>🌐 Standalone Subscription-Page</b></summary>
-
-Install subscription-page on a **separate server** connecting to your main panel via API:
-
-```bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone --with-caddy
-```
-
-The installer asks for panel URL, API token, and subscription domain, then generates a minimal docker-compose without DB dependencies.
+|---|---|
+| `install` / `uninstall` | Install / remove completely |
+| `install --name X --dev` | Custom directory name, dev image |
+| `up` / `down` / `restart` / `status` / `logs` | Service lifecycle |
+| `update` | Update script and containers with migrations |
+| `backup` / `restore` / `schedule` | Backups: manual, restore, cron |
+| `edit` / `edit-env` / `console` | compose, .env, panel console |
+| `subpage` / `subpage-token` / `subpage-restart` | Subscription-page management |
+| `install-subpage-standalone --with-caddy` | Subpage on a separate server |
+| `caddy …` | Caddy install & management (`up/down/logs/edit/reset-user`) |
 
 </details>
 
 <details>
-<summary><b>📱 Telegram Integration</b></summary>
-
-Configure in `.env`:
-
-```bash
-IS_TELEGRAM_NOTIFICATIONS_ENABLED=true
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_NOTIFY_USERS_CHAT_ID=your_chat_id
-TELEGRAM_NOTIFY_NODES_CHAT_ID=your_chat_id
-```
-
-Supports backup notifications, large file delivery (>50MB chunked), and thread-based group chats.
-
-</details>
-
-<details>
-<summary><b>🔄 Variable Migration (v2.2.0+)</b></summary>
-
-On `remnawave update`, deprecated env vars (OAuth, Branding) are auto-removed from `.env` with backup. Configure them in Panel UI instead:
-
-- **Settings → Authentication → Login Methods** (OAuth)
-- **Settings → Branding** (Logo, title)
-
-</details>
-
-<details>
-<summary><b>📂 File Structure</b></summary>
+<summary><b>📂 File structure</b></summary>
 
 ```text
-/opt/remnawave/
-├── .env, .env.subscription
-├── docker-compose.yml
-├── app-config.json, backup-config.json
-├── backup-scheduler.sh
-├── backups/              # Backup storage
-└── logs/                 # Operation logs
-
-/opt/caddy-remnawave/     # Caddy (if installed)
-├── docker-compose.yml, Caddyfile, .env
-└── data/                 # SSL certs
-
-/usr/local/bin/remnawave  # CLI command
-```
-
-</details>
-
----
-
-## 💾 Backup, Restore & Migration
-
-Built-in backup system in `remnawave.sh` with version-aware restore, cron scheduling, and Telegram delivery.
-
-### Backup
-
-```bash
-remnawave backup                    # Full system backup (compressed .tar.gz)
-remnawave backup --data-only        # Database only (.sql.gz)
-remnawave backup --no-compress      # Uncompressed backup
-```
-
-> On `update`, a safety snapshot (DB dump + `.env`/compose) is created automatically under `backups/pre-update-*` before any breaking migration is applied.
-
-### Scheduled Backups
-
-```bash
-remnawave schedule                  # Interactive cron schedule setup
-```
-
-Options: daily/weekly/monthly intervals, retention policies, compression settings, Telegram delivery.
-
-### Restore
-
-```bash
-remnawave restore --file backup.tar.gz                  # Full restore (auto safety backup)
-remnawave restore --database-only --file database.sql.gz # Database only
-```
-
-**Version checking:** major/minor versions must match for restore; patch differences show warnings but are allowed.
-
-### Migration to Another Server
-
-1. Create a backup on the **source** server:
-   ```bash
-   remnawave backup
-   ```
-2. Transfer the backup file to the **target** server (e.g., via `scp`)
-3. On the **target** server, install and restore:
-   ```bash
-   bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name remnawave
-   remnawave restore --file backup.tar.gz
-   ```
-
-<details>
-<summary><b>🛠 Manual Restore (if automatic fails)</b></summary>
-
-```bash
-# Option A: New installation
-sudo bash remnawave.sh @ install --name remnawave
-sudo remnawave down
-tar -xzf backup.tar.gz
-cat backup_folder/database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
-sudo remnawave up
-
-# Option B: Existing installation
-sudo remnawave down
-cat database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
-sudo remnawave up
+/opt/remnawave/            # .env, docker-compose.yml, backups/, logs/
+/opt/caddy-remnawave/      # Caddy (if installed)
+/usr/local/bin/remnawave   # CLI command
 ```
 
 </details>
@@ -233,162 +91,148 @@ sudo remnawave up
 
 ## 🛰 RemnaNode
 
-Installer and manager for **RemnaNode** proxy nodes with Xray-core integration. Multi-architecture support (x86_64, ARM64, ARM32, MIPS).
+<div align="center"><img src="assets/preview-remnanode.svg" alt="remnanode menu" width="720"></div>
 
-### Installation
+- **Xray-core** — install and update from the menu, pre-releases included; real-time Xray logs
+- **Non-interactive mode** — `--force --secret-key="KEY"` for mass provisioning
+- **NET_ADMIN** capability and config migrations applied automatically on `update`
+- **Log rotation** — 50 MB × 5 files, zero downtime; multi-arch: x86_64 / ARM64 / ARM32 / MIPS
 
 ```bash
-# Interactive
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
-
-# Non-interactive (force mode)
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
-    --force --secret-key="KEY" --port=3001 --xray
+remnanode                 # interactive menu
+remnanode core-update     # update Xray-core
+remnanode xray_log_err    # real-time Xray errors
 ```
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--force`, `-f` | Skip all confirmations | — |
-| `--secret-key=KEY` | SECRET_KEY from Panel (required in force mode) | — |
-| `--port=PORT` | NODE_PORT | `3000` |
-| `--xtls-port=PORT` | XTLS_API_PORT | `61000` |
-| `--xray` / `--no-xray` | Install Xray-core | not installed in force mode |
-| `--name NAME` | Directory name | `remnanode` |
-| `--dev` | Development image | — |
-
-### Commands
-
 <details>
-<summary><b>📋 All Node Commands</b></summary>
+<summary><b>📋 CLI commands & install flags</b></summary>
+
+| Install flag | Description |
+|---|---|
+| `--force`, `-f` | Skip confirmations (for automation) |
+| `--secret-key=KEY` | SECRET_KEY from the Panel (required with `--force`) |
+| `--port=PORT` / `--xtls-port=PORT` | NODE_PORT (3000) / XTLS_API_PORT (61000) |
+| `--xray` / `--no-xray` | Whether to install Xray-core |
+| `--name NAME` / `--dev` | Directory name / dev image |
 
 | Command | Description |
-|---------|-------------|
-| `install` | Install RemnaNode |
-| `install-script` | Install script only |
-| `update` | Update script and container |
-| `uninstall` | Remove node |
-| `up` / `down` / `restart` | Service lifecycle |
-| `status` / `logs` | Status & logs |
-| `core-update` | Update Xray-core binary |
-| `edit` / `edit-env` | Edit configs |
-| `setup-logs` | Configure log rotation |
-| `xray_log_out` / `xray_log_err` | Xray real-time logs |
-| `auto-restart` | Configure scheduled auto-restart (enable/disable/status/test) |
-
-</details>
-
-### Highlights
-
-- **Xray-core** — auto-detection, interactive version selection, pre-release support
-- **NET_ADMIN capability** (v4.2.0+) — auto-added for IP Management features (view/drop user connections). Auto-migrated on `update`
-- **Log rotation** — 50MB max, 5 files, compressed, no downtime
-- **Config migration** (v2.2.2+) — `APP_PORT` → `NODE_PORT`, `SSL_CERT` → `SECRET_KEY` (auto on `update`)
-- **Dual config** — supports both `.env` and inline docker-compose variables
-
-<details>
-<summary><b>📂 File Structure</b></summary>
+|---|---|
+| `install` / `uninstall` / `update` | Lifecycle |
+| `up` / `down` / `restart` / `status` / `logs` | Service management |
+| `core-update` | Xray-core update |
+| `xray_log_out` / `xray_log_err` | Real-time Xray logs |
+| `setup-logs` / `auto-restart` | Log rotation / scheduled auto-restart |
 
 ```text
-/opt/remnanode/
-├── .env
-└── docker-compose.yml
-
-/var/lib/remnanode/       # Xray binary
-/var/log/remnanode/       # Node logs
-/usr/local/bin/remnanode  # CLI command
-/etc/logrotate.d/remnanode
+/opt/remnanode/            # .env, docker-compose.yml
+/var/lib/remnanode/        # Xray binary
+/usr/local/bin/remnanode   # CLI command
 ```
 
 </details>
 
 ---
 
-## 🎭 Caddy Selfsteal (Reality Masking)
+## 🎭 Caddy Selfsteal
 
-Deploy Caddy as a **Reality traffic masking** solution with professional website templates for HTTPS camouflage.
+<div align="center"><img src="assets/preview-selfsteal.svg" alt="selfsteal menu" width="720"></div>
 
-### Installation
-
-```bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ install
-```
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `install` / `uninstall` | Install or remove |
-| `up` / `down` / `restart` | Service lifecycle |
-| `status` / `logs` | Status & logs |
-| `template` | Manage website templates |
-| `edit` | Edit Caddyfile |
-| `guide` | Reality integration guide |
-| `update` | Update script |
-
-### Templates
-
-8 pre-built website templates: `10gag`, `converter`, `downloader`, `filecloud`, `games-site`, `modmanager`, `speedtest`, `YouTube`.
+- **8 website templates** for camouflage: social, converters, file clouds, speedtest, and more
+- **Anti-fingerprint** — every template is uniquified on install (no byte-identical copies), provenance traces stripped
+- **Built-in guide** for Reality integration (`selfsteal guide`)
 
 ```bash
-selfsteal template list              # List templates
-selfsteal template install converter # Install template
+selfsteal template list                 # list templates
+selfsteal template install converter    # install a template
 ```
 
-> 🛡️ **v2.8.0:** every template is uniquified per install (no byte-identical fingerprint) and provenance leaks are stripped. HTTP/3 is **off by default** — enable with `--h3`; disable mutation with `--no-randomize`. See [README-selfsteal.md](README-selfsteal.md).
-
-**Xray Reality config:**
-```json
+```jsonc
+// Xray Reality: dest points to Caddy
 { "realitySettings": { "dest": "127.0.0.1:9443", "serverNames": ["your-domain.com"] } }
 ```
 
-<details>
-<summary><b>📂 File Structure</b></summary>
+Details (HTTP/3, `--no-randomize`, structure): **[README-selfsteal.md](./README-selfsteal.md)**
 
-```text
-/opt/caddy/
-├── .env, docker-compose.yml, Caddyfile
-├── logs/
-└── html/           # Template content
-    ├── index.html, 404.html
-    └── assets/
+---
 
-/usr/local/bin/selfsteal
+## 🌐 WTM — WARP & Tor Manager
+
+<div align="center"><img src="assets/preview-wtm.svg" alt="wtm menu" width="720"></div>
+
+- **WARP** as a native WireGuard outbound for Xray (no TUN interface) + **WARP+** support
+- **Tor** SOCKS5 proxy and `.onion` routing through Xray
+- Connection tests, watchdog, ready-to-paste Xray config snippets
+
+```bash
+sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
+sudo wtm    # menu; or: wtm install-all / warp-plus / status
 ```
+
+Full documentation: **[README-warp.md](./README-warp.md)**
+
+## 🐦 NetBird
+
+Installer for [NetBird](https://netbird.io/) mesh VPN: CLI, cloud-init, interactive menu, Ansible mode.
+
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key YOUR-SETUP-KEY
+```
+
+Full documentation: **[README-netbird.md](./README-netbird.md)**
+
+---
+
+## 💾 Backups & Migration
+
+```bash
+remnawave backup                     # full backup (.tar.gz) or --data-only (DB only)
+remnawave schedule                   # cron schedule, retention, Telegram delivery
+remnawave restore --file backup.tar.gz
+```
+
+Before every `update` a safety snapshot (DB dump + configs) is created under `backups/pre-update-*`. Restores are checked for panel version compatibility.
+
+<details>
+<summary><b>🚚 Server migration & manual restore</b></summary>
+
+```bash
+# 1. On the old server
+remnawave backup
+# 2. Transfer the archive (scp) to the new server
+# 3. On the new server
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name remnawave
+remnawave restore --file backup.tar.gz
+```
+
+If automation fails — manual DB restore:
+
+```bash
+sudo remnawave down
+cat database.sql | docker exec -i -e PGPASSWORD="password" remnawave-db psql -U postgres -d postgres
+sudo remnawave up
+```
+
+> ⚠️ When restoring a DB onto a **fresh** install, copy the secret from the old `.env`: `APP_SECRET` (panel v3+) or `JWT_AUTH_SECRET`+`JWT_API_TOKENS_SECRET` (v2) — otherwise you'll get a 403 on login.
 
 </details>
 
 ---
 
-## ⚙️ System Requirements
+## ⚙️ Requirements & Security
 
-| | Minimum | Recommended |
-|---|---------|-------------|
-| **CPU** | 1 core | 2+ cores |
-| **RAM** | 512 MB | 2 GB+ |
-| **Storage** | 2 GB | 10 GB+ SSD |
-| **Network** | Stable | 100 Mbps+ |
+**OS:** Ubuntu 18.04+ / Debian 10+ / CentOS 7+ / AlmaLinux 8+ / Fedora 32+ / Arch / openSUSE 15+ · **Minimum:** 1 CPU, 512 MB RAM · **Recommended:** 2+ CPU, 2 GB RAM, SSD
+**Dependencies** (auto-installed): Docker + Compose v2, curl, openssl, jq
 
-**OS:** Ubuntu 18.04+, Debian 10+, CentOS 7+, AlmaLinux 8+, Fedora 32+, Arch, openSUSE 15+
-
-**Dependencies** (auto-installed): Docker Engine, Docker Compose V2, curl, openssl, jq, tar/gzip
-
----
-
-## 🔐 Security
-
-- Services bind to `127.0.0.1` by default
-- Auto-generated DB credentials, panel secrets (APP_SECRET), API tokens
-- UFW/firewalld guidance during setup
-- SSL/TLS via Caddy with DNS validation
+- All services bind to `127.0.0.1` only; public access goes through Caddy with auto-SSL
+- Secrets, DB credentials, and API tokens are generated automatically
+- Diagnostics: `remnawave status` / `logs --follow` / the "Health check" menu item
 
 <details>
-<summary><b>🔒 Production Hardening</b></summary>
+<summary><b>🔒 Production hardening (UFW)</b></summary>
 
 ```bash
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow from trusted_ip to any port panel_port
+sudo ufw default deny incoming && sudo ufw default allow outgoing
+sudo ufw allow ssh && sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
@@ -396,91 +240,12 @@ sudo ufw enable
 
 ---
 
-## 📊 Monitoring & Logs
-
-```bash
-remnawave status && remnanode status && selfsteal status  # Service status
-remnawave logs --follow    # Real-time logs
-docker stats               # Resource usage
-```
-
-<details>
-<summary><b>📋 Log Locations</b></summary>
-
-| Component | Path |
-|-----------|------|
-| Panel | `/opt/remnawave/logs/` |
-| Node (Xray) | `/var/log/remnanode/` |
-| Caddy | `/opt/caddy/logs/` |
-
-Log rotation: 50MB max, 5 files kept, compressed automatically.
-
-</details>
-
----
-
-## 🧩 Other Scripts
-
-This repository also includes additional utility scripts for network management and VPN setup.
-
-### 🌐 WTM — WARP & Tor Manager
-
-Professional tool for managing **Cloudflare WARP** and **Tor** on Linux servers. Includes XRay integration, interactive menus, and auto-updates.
-
-```bash
-# Install as global command
-sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
-
-# Or run directly
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh)
-
-# Install both WARP and Tor
-sudo wtm install-all
-```
-
-Key features: WARP (WireGuard), Tor SOCKS5 proxy, XRay routing for `.onion` domains, connection testing, service monitoring.
-
-📖 Full documentation: [README-warp.md](./README-warp.md)
-
-### 🐦 NetBird — VPN Installer
-
-Quick installer for [NetBird](https://netbird.io/) mesh VPN. Supports CLI, cloud-init, interactive menu, and Ansible modes.
-
-```bash
-# CLI installation
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key YOUR-SETUP-KEY
-
-# Auto-install for cloud-init / provisioning
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key YOUR-SETUP-KEY
-
-# Interactive menu
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) menu
-```
-
-Key features: one-liner install, SSH access between peers (`--ssh`), auto-firewall setup (UFW/firewalld), Ansible-friendly mode.
-
-📖 Full documentation: [README-netbird.md](./README-netbird.md)
-
----
-
-## 🤝 Contributing
-
-1. Fork → branch → make changes → test → PR
-2. Follow existing code style, test on multiple distros
-3. Check [existing issues](https://github.com/DigneZzZ/remnawave-scripts/issues) before reporting bugs
-
----
-
-## 📜 License
-
-[MIT License](./LICENSE) — free for commercial and private use.
-
----
-
 <div align="center">
 
 **⭐ Star this project if you find it useful!**
 
-[Report Bug](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Request Feature](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Community: gig.ovh](https://gig.ovh)
+[Report Bug](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Request Feature](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Community gig.ovh](https://gig.ovh) · [MIT License](./LICENSE)
+
+*PRs welcome: fork → branch → changes → PR. Please test on multiple distros.*
 
 </div>

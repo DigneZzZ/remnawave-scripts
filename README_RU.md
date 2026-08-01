@@ -1,145 +1,78 @@
-# Remnawave Скрипты
+<div align="center">
+
+<img src="assets/hero.svg" alt="Remnawave Scripts" width="880">
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![Версия](https://img.shields.io/badge/версия-6.3.0-blue.svg)](#)
-[![Локализация](https://img.shields.io/badge/🌐_Языки-EN_|_RU-green.svg)](#)
+[![Версия](https://img.shields.io/badge/remnawave.sh-6.4.0-blue.svg)](#)
+[![Panel v3](https://img.shields.io/badge/Remnawave_Panel-v3_ready-brightgreen.svg)](#)
+[![Локализация](https://img.shields.io/badge/🌐-RU_|_EN-green.svg)](./README.md)
 
-![remnawave-script](remnawave-script.webp)
+**[English](./README.md)** · **[Быстрый старт](#-быстрый-старт)** · **[Скрипты](#-скрипты)** · **[Бэкапы](#-бэкапы-и-миграция)** · **[Поддержка](https://gig.ovh/t/remnawave-managment-scripts-by-dignezzz/116)**
 
-> **TL;DR:** Однострочные скрипты для развёртывания и управления **Remnawave Panel**, **RemnaNode** и **маскировки трафика Reality** через Docker. Включают резервное копирование/восстановление, Telegram-уведомления, Caddy reverse proxy и двуязычный CLI (RU/EN).
+</div>
 
-**[📖 Readme in English](/README.md)** · **[💬 Поддержка](https://gig.ovh/t/remnawave-managment-scripts-by-dignezzz/116)**
+Однострочная установка и полноценный CLI для **Remnawave Panel**, **RemnaNode**, маскировки **Reality**, **WARP/Tor** и корпоративных бэкапов. Всё на Docker, интерфейс RU/EN, идемпотентные операции, автообновление.
 
----
+> 🆕 **Remnawave Panel v3.0.0 поддерживается из коробки.** Свежие установки сразу получают v3-конфигурацию, а `remnawave update` сам мигрирует `.env` при переходе с v2 — с проверкой версии образа и бэкапом каждого изменённого файла.
 
-## 🚀 Быстрый старт
+## ⚡ Быстрый старт
 
 ```bash
-# Remnawave Panel
+# Панель Remnawave
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install
 
-# RemnaNode
+# Нода RemnaNode
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
 
-# Caddy Selfsteal (маскировка Reality)
+# Caddy Selfsteal — маскировка Reality
 bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ install
 ```
 
-После установки управляйте сервисами командами: `remnawave`, `remnanode` или `selfsteal`.
+После установки скрипт доступен как глобальная команда: `remnawave`, `remnanode`, `selfsteal` — без аргументов открывается интерактивное меню.
 
----
+## 📦 Скрипты
 
-## 📦 Состав проекта
-
-| Скрипт | Назначение | Команда управления |
-|--------|------------|-------------------|
-| **remnawave.sh** | Установщик и менеджер панели | `remnawave <команда>` |
-| **remnanode.sh** | Установщик и менеджер узла | `remnanode <команда>` |
-| **selfsteal.sh** | Маскировка трафика Reality | `selfsteal <команда>` |
-| **wtm.sh** | Менеджер WARP и Tor | `wtm <команда>` |
-| **netbird.sh** | Установщик NetBird VPN | `netbird.sh <команда>` |
-
-**Общие возможности:** автообновление, интерактивные меню, двуязычный интерфейс (RU/EN), Docker Compose v2, идемпотентные операции.
+| Скрипт | Что делает | Документация |
+|---|---|---|
+| 🚀 **remnawave.sh** | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
+| 🛰 **remnanode.sh** | Нода: Xray-core, логи, автоперезапуск | этот файл |
+| 🎭 **selfsteal.sh** | Caddy-маскировка для Reality, 8 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
+| 🌐 **wtm.sh** | WARP + Tor: WireGuard-outbound для Xray, WARP+ | [README-warp](./README-warp.md) |
+| 🐦 **netbird.sh** | NetBird mesh-VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
 ---
 
 ## 🚀 Remnawave Panel
 
-Полный установщик и менеджер [Remnawave Panel](https://github.com/remnawave/) с бэкапами, Caddy proxy, Telegram-интеграцией и управлением страницей подписки.
+<div align="center"><img src="assets/preview-remnawave.svg" alt="Меню remnawave" width="720"></div>
 
-### Установка
+- **Установка под ключ** — `.env`, секреты, порты, compose и админ создаются автоматически (креды в `admin-credentials.txt`)
+- **Caddy reverse proxy** — авто-SSL, опционально портал аутентификации с MFA (Caddy Security)
+- **Subscription-page** — вместе с панелью или standalone на отдельном сервере; API-токен создаётся сам, с минимальными скоупами
+- **Безопасный `update`** — снапшот БД и конфигов перед обновлением + автоматические миграции (включая v2 → v3)
+- **Telegram** — уведомления и доставка бэкапов, поддержка тредов и прокси
 
 ```bash
-# Стандартная установка
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install
-
-# С параметрами
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name panel-prod --dev
+remnawave              # интерактивное меню
+remnawave update       # обновление скрипта, образов и миграции
+remnawave backup       # бэкап вручную (или `schedule` — по расписанию)
 ```
 
-| Флаг | Описание |
-|------|----------|
-| `--name NAME` | Пользовательское имя директории |
-| `--dev` | Установка версии для разработки |
-
-### Команды
-
 <details>
-<summary><b>📋 Все команды панели</b></summary>
+<summary><b>📋 Команды CLI и флаги установки</b></summary>
 
 | Команда | Описание |
-|---------|----------|
-| `install` | Установить Remnawave Panel |
-| `install-script` | Установить только скрипт управления |
-| `update` | Обновить скрипт и контейнеры |
-| `uninstall` | Полностью удалить панель |
-| `up` / `down` / `restart` | Жизненный цикл сервисов |
-| `status` | Показать статус сервисов |
-| `logs` | Просмотреть логи (`--follow`) |
-| `edit` | Редактировать docker-compose.yml |
-| `edit-env` | Редактировать .env |
-| `console` | Доступ к CLI консоли панели |
-| `backup` | Создать бэкап (`--data-only`, `--no-compress`) |
-| `restore` | Восстановить из бэкапа (`--file FILE`, `--database-only`) |
-| `schedule` | Управление расписанием бэкапов |
-| `subpage` | Настройки страницы подписки |
-| `subpage-token` | Настроить API токен |
-| `subpage-restart` | Перезапустить subscription-page |
-| `install-subpage` | Установить только subscription-page |
-| `install-subpage-standalone` | Установить subpage на отдельном сервере (`--with-caddy`) |
-| `caddy` / `caddy up` / `caddy down` | Управление Caddy |
-| `caddy logs` / `caddy edit` | Логи и конфигурация Caddy |
-| `caddy restart` / `caddy uninstall` | Жизненный цикл Caddy |
-| `caddy reset-user` | Сбросить пароль админа Caddy |
-
-</details>
-
-### Основные возможности
-
-- **Автогенерация** `.env`, секретов, портов, `docker-compose.yml`
-- **Автосоздание админа** — credentials сохраняются в `admin-credentials.txt`
-- **Caddy Reverse Proxy** — Простой режим (авто SSL) или Безопасный режим (портал аутентификации + MFA)
-- **Система бэкапов** — полные/только БД, cron-расписание, доставка в Telegram, версионное восстановление → см. [💾 Бэкап, восстановление и миграция](#-бэкап-восстановление-и-миграция)
-- **Безопасное обновление** — автоматический снимок БД + конфигов перед каждым `update`, плюс миграция устаревших env-переменных (v2.2.0+)
-- **Токен subscription-page** — создаётся автоматически с минимально необходимыми скоупами и настраиваемым сроком жизни (Remnawave panel v2.8.0+)
-
-<details>
-<summary><b>🌐 Standalone Subscription-Page</b></summary>
-
-Установка subscription-page на **отдельном сервере** с подключением к основной панели через API:
-
-```bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install-subpage-standalone --with-caddy
-```
-
-Установщик запросит URL панели, API токен и домен для подписки, затем сгенерирует минимальный docker-compose без зависимостей БД.
-
-</details>
-
-<details>
-<summary><b>📱 Интеграция с Telegram</b></summary>
-
-Настройка в `.env`:
-
-```bash
-IS_TELEGRAM_NOTIFICATIONS_ENABLED=true
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_NOTIFY_USERS_CHAT_ID=your_chat_id
-TELEGRAM_NOTIFY_NODES_CHAT_ID=your_chat_id
-```
-
-Поддерживает уведомления о бэкапах, доставку больших файлов (>50MB частями) и треды в групповых чатах.
-
-</details>
-
-<details>
-<summary><b>🔄 Миграция переменных (v2.2.0+)</b></summary>
-
-При `remnawave update` устаревшие env-переменные (OAuth, Branding) автоматически удаляются из `.env` с созданием резервной копии. Настраивайте их в UI панели:
-
-- **Настройки → Аутентификация → Методы входа** (OAuth)
-- **Настройки → Брендинг** (Логотип, название)
+|---|---|
+| `install` / `uninstall` | Установка / полное удаление |
+| `install --name X --dev` | Своё имя каталога, dev-образ |
+| `up` / `down` / `restart` / `status` / `logs` | Управление сервисами |
+| `update` | Обновление скрипта и контейнеров с миграциями |
+| `backup` / `restore` / `schedule` | Бэкапы: вручную, восстановление, cron |
+| `edit` / `edit-env` / `console` | compose, .env, консоль панели |
+| `subpage` / `subpage-token` / `subpage-restart` | Управление subscription-page |
+| `install-subpage-standalone --with-caddy` | Subpage на отдельном сервере |
+| `caddy …` | Установка и управление Caddy (`up/down/logs/edit/reset-user`) |
 
 </details>
 
@@ -147,84 +80,9 @@ TELEGRAM_NOTIFY_NODES_CHAT_ID=your_chat_id
 <summary><b>📂 Структура файлов</b></summary>
 
 ```text
-/opt/remnawave/
-├── .env, .env.subscription
-├── docker-compose.yml
-├── app-config.json, backup-config.json
-├── backup-scheduler.sh
-├── backups/              # Хранилище бэкапов
-└── logs/                 # Логи операций
-
-/opt/caddy-remnawave/     # Caddy (если установлен)
-├── docker-compose.yml, Caddyfile, .env
-└── data/                 # SSL сертификаты
-
-/usr/local/bin/remnawave  # CLI команда
-```
-
-</details>
-
----
-
-## 💾 Бэкап, восстановление и миграция
-
-Встроенная система резервного копирования в `remnawave.sh` с версионным восстановлением, cron-расписанием и доставкой в Telegram.
-
-### Бэкап
-
-```bash
-remnawave backup                    # Полный системный бэкап (сжатый .tar.gz)
-remnawave backup --data-only        # Только база данных (.sql.gz)
-remnawave backup --no-compress      # Несжатый бэкап
-```
-
-> При `update` перед применением любых ломающих миграций автоматически создаётся защитный снимок (дамп БД + `.env`/compose) в каталоге `backups/pre-update-*`.
-
-### Бэкапы по расписанию
-
-```bash
-remnawave schedule                  # Интерактивная настройка cron-расписания
-```
-
-Параметры: ежедневные/еженедельные/ежемесячные интервалы, политики хранения, настройки сжатия, доставка в Telegram.
-
-### Восстановление
-
-```bash
-remnawave restore --file backup.tar.gz                  # Полное восстановление (авто safety-бэкап)
-remnawave restore --database-only --file database.sql.gz # Только база данных
-```
-
-**Проверка версий:** major/minor версии должны совпадать для восстановления; различия patch показывают предупреждения, но допускаются.
-
-### Миграция на другой сервер
-
-1. Создайте бэкап на **исходном** сервере:
-   ```bash
-   remnawave backup
-   ```
-2. Перенесите файл бэкапа на **целевой** сервер (например, через `scp`)
-3. На **целевом** сервере установите и восстановите:
-   ```bash
-   bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name remnawave
-   remnawave restore --file backup.tar.gz
-   ```
-
-<details>
-<summary><b>🛠 Ручное восстановление (если автоматическое не работает)</b></summary>
-
-```bash
-# Вариант A: Новая установка
-sudo bash remnawave.sh @ install --name remnawave
-sudo remnawave down
-tar -xzf backup.tar.gz
-cat backup_folder/database.sql | docker exec -i -e PGPASSWORD="пароль" remnawave-db psql -U postgres -d postgres
-sudo remnawave up
-
-# Вариант B: Существующая установка
-sudo remnawave down
-cat database.sql | docker exec -i -e PGPASSWORD="пароль" remnawave-db psql -U postgres -d postgres
-sudo remnawave up
+/opt/remnawave/            # .env, docker-compose.yml, backups/, logs/
+/opt/caddy-remnawave/      # Caddy (если установлен)
+/usr/local/bin/remnawave   # CLI-команда
 ```
 
 </details>
@@ -233,161 +91,148 @@ sudo remnawave up
 
 ## 🛰 RemnaNode
 
-Установщик и менеджер **RemnaNode** — прокси-узлов с интеграцией Xray-core. Поддержка мультиархитектуры (x86_64, ARM64, ARM32, MIPS).
+<div align="center"><img src="assets/preview-remnanode.svg" alt="Меню remnanode" width="720"></div>
 
-### Установка
+- **Xray-core** — установка и обновление из меню, включая pre-release; логи Xray в реальном времени
+- **Неинтерактивный режим** — `--force --secret-key="KEY"` для массового развёртывания
+- **NET_ADMIN** и миграции конфигурации добавляются автоматически при `update`
+- **Ротация логов** — 50 МБ × 5 файлов, без простоя; мультиарх: x86_64 / ARM64 / ARM32 / MIPS
 
 ```bash
-# Интерактивный режим
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install
-
-# Неинтерактивный (force режим)
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnanode.sh) @ install \
-    --force --secret-key="KEY" --port=3001 --xray
+remnanode                 # интерактивное меню
+remnanode core-update     # обновить Xray-core
+remnanode xray_log_err    # ошибки Xray в реальном времени
 ```
 
-| Флаг | Описание | По умолчанию |
-|------|----------|--------------|
-| `--force`, `-f` | Пропустить все подтверждения | — |
-| `--secret-key=KEY` | SECRET_KEY из панели (обязателен в force режиме) | — |
-| `--port=PORT` | NODE_PORT | `3000` |
-| `--xtls-port=PORT` | XTLS_API_PORT | `61000` |
-| `--xray` / `--no-xray` | Установить Xray-core | не устанавливается в force режиме |
-| `--name NAME` | Имя директории | `remnanode` |
-| `--dev` | Образ для разработки | — |
-
-### Команды
-
 <details>
-<summary><b>📋 Все команды узла</b></summary>
+<summary><b>📋 Команды CLI и флаги установки</b></summary>
+
+| Флаг установки | Описание |
+|---|---|
+| `--force`, `-f` | Без подтверждений (для автоматизации) |
+| `--secret-key=KEY` | SECRET_KEY из панели (обязателен с `--force`) |
+| `--port=PORT` / `--xtls-port=PORT` | NODE_PORT (3000) / XTLS_API_PORT (61000) |
+| `--xray` / `--no-xray` | Ставить ли Xray-core |
+| `--name NAME` / `--dev` | Имя каталога / dev-образ |
 
 | Команда | Описание |
-|---------|----------|
-| `install` | Установить RemnaNode |
-| `install-script` | Установить только скрипт |
-| `update` | Обновить скрипт и контейнер |
-| `uninstall` | Удалить узел |
-| `up` / `down` / `restart` | Жизненный цикл сервисов |
-| `status` / `logs` | Статус и логи |
-| `core-update` | Обновить бинарный файл Xray-core |
-| `edit` / `edit-env` | Редактирование конфигов |
-| `setup-logs` | Настройка ротации логов |
+|---|---|
+| `install` / `uninstall` / `update` | Жизненный цикл |
+| `up` / `down` / `restart` / `status` / `logs` | Управление сервисами |
+| `core-update` | Обновление Xray-core |
 | `xray_log_out` / `xray_log_err` | Логи Xray в реальном времени |
-
-</details>
-
-### Основные возможности
-
-- **Xray-core** — автоопределение, интерактивный выбор версии, поддержка pre-release
-- **NET_ADMIN capability** (v4.2.0+) — автоматически добавляется для функций IP Management (просмотр/сброс пользовательских соединений). Автомиграция при `update`
-- **Ротация логов** — макс. 50MB, 5 файлов, сжатие, без простоя
-- **Миграция конфигурации** (v2.2.2+) — `APP_PORT` → `NODE_PORT`, `SSL_CERT` → `SECRET_KEY` (автоматически при `update`)
-- **Два формата конфигурации** — поддержка `.env` и inline-переменных в docker-compose
-
-<details>
-<summary><b>📂 Структура файлов</b></summary>
+| `setup-logs` / `auto-restart` | Ротация логов / автоперезапуск по расписанию |
 
 ```text
-/opt/remnanode/
-├── .env
-└── docker-compose.yml
-
-/var/lib/remnanode/       # Бинарный файл Xray
-/var/log/remnanode/       # Логи ноды
-/usr/local/bin/remnanode  # CLI команда
-/etc/logrotate.d/remnanode
+/opt/remnanode/            # .env, docker-compose.yml
+/var/lib/remnanode/        # бинарник Xray
+/usr/local/bin/remnanode   # CLI-команда
 ```
 
 </details>
 
 ---
 
-## 🎭 Caddy Selfsteal (маскировка Reality)
+## 🎭 Caddy Selfsteal
 
-Развёртывание Caddy как решения для **маскировки трафика Reality** с профессиональными шаблонами сайтов для HTTPS-камуфляжа.
+<div align="center"><img src="assets/preview-selfsteal.svg" alt="Меню selfsteal" width="720"></div>
 
-### Установка
-
-```bash
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal.sh) @ install
-```
-
-### Команды
-
-| Команда | Описание |
-|---------|----------|
-| `install` / `uninstall` | Установить или удалить |
-| `up` / `down` / `restart` | Жизненный цикл сервисов |
-| `status` / `logs` | Статус и логи |
-| `template` | Управление шаблонами сайтов |
-| `edit` | Редактировать Caddyfile |
-| `guide` | Руководство по интеграции Reality |
-| `update` | Обновить скрипт |
-
-### Шаблоны
-
-8 готовых шаблонов сайтов: `10gag`, `converter`, `downloader`, `filecloud`, `games-site`, `modmanager`, `speedtest`, `YouTube`.
+- **8 шаблонов сайтов** для камуфляжа: соцсети, конвертеры, файлообменники, спидтест и др.
+- **Антифингерпринт** — каждый шаблон уникализируется при установке (нет байт-в-байт совпадений), следы происхождения вырезаются
+- **Встроенный гайд** по интеграции с Reality (`selfsteal guide`)
 
 ```bash
-selfsteal template list              # Список шаблонов
-selfsteal template install converter # Установить шаблон
+selfsteal template list                 # список шаблонов
+selfsteal template install converter    # установить шаблон
 ```
 
-> 🛡️ **v2.8.0:** каждый шаблон уникализируется при установке (нет байт-в-байт отпечатка), утечки источника вырезаются. HTTP/3 **выключен по умолчанию** — включить `--h3`; отключить мутацию `--no-randomize`. Подробнее: [README-selfsteal.md](README-selfsteal.md).
-
-**Конфигурация Xray Reality:**
-```json
+```jsonc
+// Xray Reality: dest указывает на Caddy
 { "realitySettings": { "dest": "127.0.0.1:9443", "serverNames": ["your-domain.com"] } }
 ```
 
-<details>
-<summary><b>📂 Структура файлов</b></summary>
+Подробности (HTTP/3, `--no-randomize`, структура): **[README-selfsteal.md](./README-selfsteal.md)**
 
-```text
-/opt/caddy/
-├── .env, docker-compose.yml, Caddyfile
-├── logs/
-└── html/           # Контент шаблона
-    ├── index.html, 404.html
-    └── assets/
+---
 
-/usr/local/bin/selfsteal
+## 🌐 WTM — WARP & Tor Manager
+
+<div align="center"><img src="assets/preview-wtm.svg" alt="Меню wtm" width="720"></div>
+
+- **WARP** как нативный WireGuard-outbound для Xray (без TUN-интерфейса) + поддержка **WARP+**
+- **Tor** SOCKS5-прокси и маршрутизация `.onion` через Xray
+- Тесты соединений, watchdog, готовые фрагменты конфигов Xray
+
+```bash
+sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
+sudo wtm    # меню; или: wtm install-all / warp-plus / status
 ```
+
+Полная документация: **[README-warp.md](./README-warp.md)**
+
+## 🐦 NetBird
+
+Установщик [NetBird](https://netbird.io/) mesh-VPN: CLI, cloud-init, интерактивное меню, Ansible-режим.
+
+```bash
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ВАШ-SETUP-KEY
+```
+
+Полная документация: **[README-netbird.md](./README-netbird.md)**
+
+---
+
+## 💾 Бэкапы и миграция
+
+```bash
+remnawave backup                     # полный бэкап (.tar.gz) или --data-only (только БД)
+remnawave schedule                   # cron-расписание, ретеншн, доставка в Telegram
+remnawave restore --file backup.tar.gz
+```
+
+Перед каждым `update` автоматически создаётся защитный снимок (дамп БД + конфиги) в `backups/pre-update-*`. При восстановлении проверяется совместимость версий панели.
+
+<details>
+<summary><b>🚚 Перенос на другой сервер и ручное восстановление</b></summary>
+
+```bash
+# 1. На старом сервере
+remnawave backup
+# 2. Перенесите архив (scp) на новый сервер
+# 3. На новом сервере
+bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remnawave.sh) @ install --name remnawave
+remnawave restore --file backup.tar.gz
+```
+
+Если автоматика не сработала — ручное восстановление БД:
+
+```bash
+sudo remnawave down
+cat database.sql | docker exec -i -e PGPASSWORD="пароль" remnawave-db psql -U postgres -d postgres
+sudo remnawave up
+```
+
+> ⚠️ При восстановлении БД на **новую** установку не забудьте перенести секрет из старого `.env`: `APP_SECRET` (panel v3+) или `JWT_AUTH_SECRET`+`JWT_API_TOKENS_SECRET` (v2) — иначе получите 403 при входе.
 
 </details>
 
 ---
 
-## ⚙️ Системные требования
+## ⚙️ Требования и безопасность
 
-| | Минимум | Рекомендуется |
-|---|---------|---------------|
-| **CPU** | 1 ядро | 2+ ядра |
-| **RAM** | 512 МБ | 2 ГБ+ |
-| **Хранилище** | 2 ГБ | 10 ГБ+ SSD |
-| **Сеть** | Стабильная | 100 Мбит/с+ |
+**ОС:** Ubuntu 18.04+ / Debian 10+ / CentOS 7+ / AlmaLinux 8+ / Fedora 32+ / Arch / openSUSE 15+ · **Минимум:** 1 CPU, 512 МБ RAM · **Рекомендуется:** 2+ CPU, 2 ГБ RAM, SSD
+**Зависимости** (ставятся сами): Docker + Compose v2, curl, openssl, jq
 
-**ОС:** Ubuntu 18.04+, Debian 10+, CentOS 7+, AlmaLinux 8+, Fedora 32+, Arch, openSUSE 15+
-
-**Зависимости** (устанавливаются автоматически): Docker Engine, Docker Compose V2, curl, openssl, jq, tar/gzip
-
----
-
-## 🔐 Безопасность
-
-- Сервисы привязываются к `127.0.0.1` по умолчанию
-- Автогенерация учётных данных БД, секретов панели (APP_SECRET), API-токенов
-- Подсказки по настройке UFW/firewalld при установке
-- SSL/TLS через Caddy с DNS-валидацией
+- Все сервисы слушают только `127.0.0.1`; наружу — через Caddy с авто-SSL
+- Секреты, пароли БД и API-токены генерируются автоматически
+- Диагностика: `remnawave status` / `logs --follow` / пункт меню «Health check»
 
 <details>
-<summary><b>🔒 Hardening для production</b></summary>
+<summary><b>🔒 Hardening для production (UFW)</b></summary>
 
 ```bash
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow from trusted_ip to any port panel_port
+sudo ufw default deny incoming && sudo ufw default allow outgoing
+sudo ufw allow ssh && sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
@@ -395,91 +240,12 @@ sudo ufw enable
 
 ---
 
-## 📊 Мониторинг и логи
-
-```bash
-remnawave status && remnanode status && selfsteal status  # Статус сервисов
-remnawave logs --follow    # Логи в реальном времени
-docker stats               # Использование ресурсов
-```
-
-<details>
-<summary><b>📋 Расположение логов</b></summary>
-
-| Компонент | Путь |
-|-----------|------|
-| Панель | `/opt/remnawave/logs/` |
-| Узел (Xray) | `/var/log/remnanode/` |
-| Caddy | `/opt/caddy/logs/` |
-
-Ротация логов: макс. 50MB, хранится 5 файлов, автоматическое сжатие.
-
-</details>
-
----
-
-## 🧩 Другие скрипты
-
-Репозиторий также включает дополнительные утилиты для управления сетью и настройки VPN.
-
-### 🌐 WTM — WARP & Tor Manager
-
-Профессиональный инструмент для управления **Cloudflare WARP** и **Tor** на Linux серверах. Включает интеграцию с XRay, интерактивные меню и автообновление.
-
-```bash
-# Установка как глобальная команда
-sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh) @ install-script
-
-# Или прямой запуск
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/wtm.sh)
-
-# Установить WARP и Tor
-sudo wtm install-all
-```
-
-Основные возможности: WARP (WireGuard), Tor SOCKS5 прокси, маршрутизация XRay для `.onion` доменов, тестирование соединений, мониторинг сервисов.
-
-📖 Полная документация: [README-warp.md](./README-warp.md)
-
-### 🐦 NetBird — Установщик VPN
-
-Быстрый установщик для [NetBird](https://netbird.io/) mesh VPN. Поддерживает CLI, cloud-init, интерактивное меню и режим для Ansible.
-
-```bash
-# CLI установка
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) install --key ВАШ-SETUP-KEY
-
-# Автоустановка для cloud-init / provisioning
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) init --key ВАШ-SETUP-KEY
-
-# Интерактивное меню
-bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/netbird.sh) menu
-```
-
-Основные возможности: установка одной командой, SSH доступ между пирами (`--ssh`), автонастройка файрвола (UFW/firewalld), режим для Ansible.
-
-📖 Полная документация: [README-netbird.md](./README-netbird.md)
-
----
-
-## 🤝 Участие в разработке
-
-1. Fork → ветка → изменения → тестирование → PR
-2. Придерживайтесь существующего стиля кода, тестируйте на нескольких дистрибутивах
-3. Проверяйте [существующие issues](https://github.com/DigneZzZ/remnawave-scripts/issues) перед отчётом об ошибках
-
----
-
-## 📜 Лицензия
-
-[MIT License](./LICENSE) — свободное использование в коммерческих и личных целях.
-
----
-
 <div align="center">
 
 **⭐ Если проект полезен — поставьте звёздочку!**
 
-[Сообщить об ошибке](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Запросить функцию](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Сообщество: gig.ovh](https://gig.ovh)
+[Сообщить об ошибке](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Предложить улучшение](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Сообщество gig.ovh](https://gig.ovh) · [MIT License](./LICENSE)
+
+*PR приветствуются: fork → ветка → изменения → PR. Тестируйте на нескольких дистрибутивах.*
 
 </div>
