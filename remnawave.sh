@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.4.0
+# VERSION=6.4.1
 
-SCRIPT_VERSION="6.4.0"
-BACKUP_SCRIPT_VERSION="1.4.1"  # Версия backup скрипта создаваемого Schedule функцией
+SCRIPT_VERSION="6.4.1"
+BACKUP_SCRIPT_VERSION="1.5.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
     shift  
@@ -2502,6 +2502,80 @@ schedule_disable() {
 
 # ===== RESTORE VALIDATION AND SAFETY FUNCTIONS =====
 
+# Resolve the DB SERVICE name from docker-compose in the current directory.
+# Generated compose always uses service key "remnawave-db" while container_name
+# is "${APP_NAME}-db" — for custom --name installs they differ, so compose
+# commands (up/ps) must use the service name, not the container name.
+get_db_service_name() {
+    local svc
+    svc=$(docker compose config --services 2>/dev/null | grep -E -- '-db$' | head -1)
+    if [ -z "$svc" ]; then
+        # POSIX class, not \s: the latter is a GNU extension and silently fails
+        # on BSD/other greps, leaving the fallback useless
+        svc=$(grep -E '^[[:space:]]{2,4}[a-zA-Z0-9_-]+-db:' docker-compose.yml 2>/dev/null | head -1 | tr -d ' :')
+    fi
+    [ -z "$svc" ] && svc="remnawave-db"
+    echo "$svc"
+}
+
+# PostgreSQL major in the (restored) compose vs data already in the DB volume.
+# A v2-era backup pins postgres:17 while a fresh v3 install has a pg18-initialized
+# volume (and vice versa) — the container then refuses to start ("database files
+# are incompatible"). Restore re-imports everything from the SQL dump anyway, so
+# on mismatch we offer to recreate the volume. Returns 0 to proceed, 1 to abort.
+# Must be called from the directory containing docker-compose.yml, services down.
+ensure_db_volume_pg_compatibility() {
+    local target_app_name="$1"
+    local volume_name="${target_app_name}-db-data"
+
+    docker volume inspect "$volume_name" >/dev/null 2>&1 || return 0  # fresh volume
+
+    local compose_pg_major
+    compose_pg_major=$(grep -Eo "image:[[:space:]]*['\"]?postgres:[0-9]+" docker-compose.yml 2>/dev/null | head -1 | grep -Eo '[0-9]+$')
+    [ -z "$compose_pg_major" ] && return 0  # can't tell — let compose try
+
+    # PG_VERSION: pg<=17 keeps it at the volume root (…/data mount),
+    # pg18+ image stores data under <version>/docker/ inside the volume
+    local volume_pg_major
+    volume_pg_major=$(docker run --rm -v "$volume_name":/dbdata:ro alpine sh -c \
+        'cat /dbdata/PG_VERSION 2>/dev/null || find /dbdata -maxdepth 3 -name PG_VERSION -exec cat {} \; 2>/dev/null | head -1' 2>/dev/null | tr -d '[:space:]')
+    [ -z "$volume_pg_major" ] && return 0
+    volume_pg_major="${volume_pg_major%%.*}"
+
+    if [ "$volume_pg_major" = "$compose_pg_major" ]; then
+        return 0
+    fi
+
+    echo
+    echo -e "\033[1;33m⚠️  PostgreSQL version mismatch detected!\033[0m"
+    echo -e "\033[38;5;250m   Backup docker-compose.yml uses:  \033[1;37mpostgres:$compose_pg_major\033[0m"
+    echo -e "\033[38;5;250m   Existing DB volume was made by:  \033[1;37mpostgres $volume_pg_major\033[0m"
+    echo -e "\033[38;5;250m   The database container cannot start with this combination.\033[0m"
+    echo
+    echo -e "\033[38;5;250m   The restore imports all data from the backup SQL dump, so the\033[0m"
+    echo -e "\033[38;5;250m   volume can be safely recreated (a safety backup was already made).\033[0m"
+    echo
+    read -p "Recreate DB volume '$volume_name' and continue? [y/N]: " -r recreate_volume
+
+    if [[ ! $recreate_volume =~ ^[Yy]$ ]]; then
+        echo -e "\033[1;33m⚠️  Restore aborted due to PostgreSQL version mismatch\033[0m"
+        log_restore_operation "PG Volume Check" "CANCELLED" "User declined volume recreation (compose pg$compose_pg_major vs volume pg$volume_pg_major)"
+        return 1
+    fi
+
+    docker compose down 2>/dev/null || true
+    if docker volume rm "$volume_name" >/dev/null 2>&1; then
+        echo -e "\033[1;32m✅ DB volume removed — it will be recreated with postgres:$compose_pg_major\033[0m"
+        log_restore_operation "PG Volume Check" "SUCCESS" "Volume $volume_name recreated for pg$compose_pg_major (was pg$volume_pg_major)"
+        return 0
+    fi
+
+    echo -e "\033[1;31m❌ Failed to remove volume '$volume_name' (still in use?)\033[0m"
+    echo -e "\033[38;5;244m   Remove it manually: docker volume rm $volume_name\033[0m"
+    log_restore_operation "PG Volume Check" "ERROR" "Failed to remove volume $volume_name"
+    return 1
+}
+
 # Функция детального логирования для операций восстановления
 log_restore_operation() {
     local operation="$1"
@@ -2542,9 +2616,14 @@ check_version_compatibility() {
         return 0
     fi
     
+    # jq на битом JSON возвращает пустую строку — нормализуем в "unknown",
+    # иначе сравнение версий срабатывает с пустыми значениями (ложный CRITICAL)
     local backup_script_version=$(jq -r '.script_version // "unknown"' "$backup_metadata" 2>/dev/null)
+    [ -z "$backup_script_version" ] && backup_script_version="unknown"
     local backup_panel_version=$(jq -r '.panel_version // "unknown"' "$backup_metadata" 2>/dev/null)
+    [ -z "$backup_panel_version" ] && backup_panel_version="unknown"
     local backup_date=$(jq -r '.date_created // "unknown"' "$backup_metadata" 2>/dev/null)
+    [ -z "$backup_date" ] && backup_date="unknown"
     
     # Получаем текущую версию панели
     local current_panel_version=$(get_panel_version)
@@ -2883,8 +2962,10 @@ create_safety_backup() {
     if [ -f "$target_dir/docker-compose.yml" ]; then
         cd "$target_dir"
         local db_container="${app_name}-db"
-        
-        if docker compose ps -q "$db_container" 2>/dev/null | grep -q .; then
+        local db_service
+        db_service=$(get_db_service_name)
+
+        if docker compose ps -q "$db_service" 2>/dev/null | grep -q .; then
             echo -e "\033[38;5;244m   Creating database dump...\033[0m"
             
             local postgres_user="postgres"
@@ -2892,14 +2973,16 @@ create_safety_backup() {
             local postgres_db="postgres"
             
             # Читаем настройки из .env если доступны
+            # (-f2- не обрезает пароли со знаком '='; кавычки срезаем)
             if [ -f "$target_dir/.env" ]; then
-                postgres_user=$(grep "^POSTGRES_USER=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-                postgres_password=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-                postgres_db=$(grep "^POSTGRES_DB=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
+                local env_val
+                env_val=$(grep "^POSTGRES_USER=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_user="$env_val"
+                env_val=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_password="$env_val"
+                env_val=$(grep "^POSTGRES_DB=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_db="$env_val"
             fi
             
             if docker exec -e PGPASSWORD="$postgres_password" "$db_container" \
-                pg_dump -U "$postgres_user" -d "$postgres_db" --clean --create > "$safety_backup_dir/database_safety.sql" 2>/dev/null; then
+                pg_dump -U "$postgres_user" -d "$postgres_db" --clean --if-exists > "$safety_backup_dir/database_safety.sql" 2>/dev/null; then
                 echo -e "\033[1;32m✅ Database safety backup created\033[0m"
                 log_restore_operation "Database Safety Backup" "SUCCESS" "Database dump created"
             else
@@ -2913,7 +2996,7 @@ create_safety_backup() {
     echo -e "\033[38;5;244m   Backing up configuration files...\033[0m"
     
     local files_copied=0
-    for file in docker-compose.yml .env config.json settings.yml remnawave.conf; do
+    for file in docker-compose.yml .env .env.subscription app-config.json backup-config.json config.json settings.yml remnawave.conf; do
         if [ -f "$target_dir/$file" ]; then
             cp "$target_dir/$file" "$safety_backup_dir/" 2>/dev/null && files_copied=$((files_copied + 1))
         fi
@@ -2967,7 +3050,7 @@ rollback_from_safety_backup() {
     
     # Восстанавливаем файлы из safety backup
     local files_restored=0
-    for file in docker-compose.yml .env config.json settings.yml remnawave.conf; do
+    for file in docker-compose.yml .env .env.subscription app-config.json backup-config.json config.json settings.yml remnawave.conf; do
         if [ -f "$safety_backup_dir/$file" ]; then
             cp "$safety_backup_dir/$file" "$target_dir/" 2>/dev/null && files_restored=$((files_restored + 1))
         fi
@@ -2984,22 +3067,35 @@ rollback_from_safety_backup() {
     # Восстанавливаем базу данных если есть
     if [ -f "$safety_backup_dir/database_safety.sql" ] && [ -f "$target_dir/docker-compose.yml" ]; then
         echo -e "\033[38;5;244m   Restoring database from safety backup...\033[0m"
-        
+
         cd "$target_dir"
-        docker compose up -d "${app_name}-db" 2>/dev/null
-        
+        local db_service
+        db_service=$(get_db_service_name)
+        docker compose up -d "$db_service" 2>/dev/null
+
+        # Читаем учетные данные БД (кастомный POSTGRES_USER не обязан быть "postgres")
+        local pg_user="postgres" pg_pass="postgres" pg_db="postgres" v
+        for env_src in "$safety_backup_dir/.env" "$target_dir/.env"; do
+            if [ -f "$env_src" ]; then
+                v=$(grep "^POSTGRES_USER=" "$env_src" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_user="$v"
+                v=$(grep "^POSTGRES_PASSWORD=" "$env_src" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_pass="$v"
+                v=$(grep "^POSTGRES_DB=" "$env_src" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_db="$v"
+                break
+            fi
+        done
+
         # Ждем готовности БД
         local attempts=0
         while [ $attempts -lt 15 ]; do
-            if docker exec "${app_name}-db" pg_isready -U postgres >/dev/null 2>&1; then
+            if docker exec "${app_name}-db" pg_isready -U "$pg_user" >/dev/null 2>&1; then
                 break
             fi
             sleep 2
             attempts=$((attempts + 1))
         done
-        
+
         if [ $attempts -lt 15 ]; then
-            if docker exec -i "${app_name}-db" psql -U postgres < "$safety_backup_dir/database_safety.sql" >/dev/null 2>&1; then
+            if docker exec -i -e PGPASSWORD="$pg_pass" "${app_name}-db" psql -U "$pg_user" -d "$pg_db" < "$safety_backup_dir/database_safety.sql" >/dev/null 2>&1; then
                 echo -e "\033[1;32m✅ Database rolled back successfully\033[0m"
                 log_restore_operation "Database Rollback" "SUCCESS" "Database restored from safety backup"
             else
@@ -3502,7 +3598,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.4.1"
+BACKUP_SCRIPT_VERSION="1.5.0"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -3682,9 +3778,9 @@ postgres_password="postgres"
 postgres_db="postgres"
 
 if [ -f "$APP_DIR/.env" ]; then
-    postgres_user=$(grep "^POSTGRES_USER=" "$APP_DIR/.env" | cut -d'=' -f2 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
-    postgres_password=$(grep "^POSTGRES_PASSWORD=" "$APP_DIR/.env" | cut -d'=' -f2 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
-    postgres_db=$(grep "^POSTGRES_DB=" "$APP_DIR/.env" | cut -d'=' -f2 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
+    postgres_user=$(grep "^POSTGRES_USER=" "$APP_DIR/.env" | head -1 | cut -d'=' -f2- 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
+    postgres_password=$(grep "^POSTGRES_PASSWORD=" "$APP_DIR/.env" | head -1 | cut -d'=' -f2- 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
+    postgres_db=$(grep "^POSTGRES_DB=" "$APP_DIR/.env" | head -1 | cut -d'=' -f2- 2>/dev/null | sed 's/^"//;s/"$//' || echo "postgres")
 fi
 
 db_container="${APP_NAME}-db"
@@ -4006,8 +4102,8 @@ if [ "$INCLUDE_REVERSE_PROXY" = "true" ] && [ -d "$CADDY_DIR" ]; then
     done
     
     if [ $caddy_files_count -gt 0 ]; then
-        # Определяем режим Caddy
-        local caddy_mode="simple"
+        # Определяем режим Caddy (top-level code in generated script — no 'local' here)
+        caddy_mode="simple"
         if grep -q "security" "$CADDY_DIR/Caddyfile" 2>/dev/null; then
             caddy_mode="secure"
         fi
@@ -4149,14 +4245,14 @@ echo "Waiting for database to be ready (checking healthcheck)..."
 
 # Функция ожидания здоровья БД
 wait_for_db_health() {
-    local container_name="\$1"
-    local max_wait="\${2:-60}"
+    local container_name="$1"
+    local max_wait="${2:-60}"
     local wait_count=0
     
-    until [ "\$(docker inspect --format='{{.State.Health.Status}}' "\$container_name" 2>/dev/null)" == "healthy" ]; do
+    until [ "$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null)" == "healthy" ]; do
         sleep 2
-        wait_count=\$((wait_count + 1))
-        if [ \$wait_count -gt \$max_wait ]; then
+        wait_count=$((wait_count + 1))
+        if [ $wait_count -gt $max_wait ]; then
             return 1
         fi
     done
@@ -4168,7 +4264,7 @@ if wait_for_db_health "${APP_NAME}-db" 30; then
 else
     echo "⚠️  Database container started but healthcheck timeout"
     echo "   Check logs: docker logs ${APP_NAME}-db"
-    echo "   Current status: \$(docker inspect --format='{{.State.Health.Status}}' "${APP_NAME}-db" 2>/dev/null || echo 'unknown')"
+    echo "   Current status: $(docker inspect --format='{{.State.Health.Status}}' "${APP_NAME}-db" 2>/dev/null || echo 'unknown')"
 fi
 
 # Восстановление Telegram ботов (если есть)
@@ -4184,7 +4280,7 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
             continue
         fi
         
-        bot_name=\$(basename "$bot_dir")
+        bot_name=$(basename "$bot_dir")
         echo "Found bot: $bot_name"
         
         # Проверяем что контейнер бота существует
@@ -4195,10 +4291,10 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
         fi
         
         # Проверяем наличие docker-compose.yml для определения метода остановки
-        bot_compose_file="/opt/remnawave/telegram-bots/\$bot_name/docker-compose.yml"
+        bot_compose_file="/opt/remnawave/telegram-bots/$bot_name/docker-compose.yml"
         use_compose_down=false
         
-        if [ -f "\$bot_compose_file" ]; then
+        if [ -f "$bot_compose_file" ]; then
             use_compose_down=true
         fi
 
@@ -4206,17 +4302,17 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
         echo ""
         echo "⚠️  ВНИМАНИЕ! Сейчас будут выполнены следующие действия:"
         echo ""
-        if [ "\$use_compose_down" = "true" ]; then
+        if [ "$use_compose_down" = "true" ]; then
             echo "  1. Остановка всех контейнеров бота через docker compose down"
-            echo "     (это остановит: \$bot_name и \${bot_name}-db)"
+            echo "     (это остановит: $bot_name и ${bot_name}-db)"
         else
             echo "  1. Принудительная остановка и удаление контейнеров:"
-            echo "     - \$bot_name"
-            echo "     - \${bot_name}-db"
+            echo "     - $bot_name"
+            echo "     - ${bot_name}-db"
         fi
         echo "  2. Удаление существующих volumes:"
-        echo "     - \${bot_name}-data"
-        echo "     - \${bot_name}-db-data"
+        echo "     - ${bot_name}-data"
+        echo "     - ${bot_name}-db-data"
         echo "  3. Восстановление данных из бэкапа"
         echo "  4. Восстановление базы данных"
         echo "  5. Запуск бота с восстановленными данными"
@@ -4224,17 +4320,17 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
         echo "Все текущие данные бота будут заменены данными из бэкапа!"
         echo ""
         
-        read -p "Продолжить восстановление бота \$bot_name? (y/n): " confirm
-        if [[ ! "\$confirm" =~ ^[Yy]$ ]]; then
+        read -p "Продолжить восстановление бота $bot_name? (y/n): " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             echo "❌ Восстановление отменено пользователем"
             continue
         fi
         echo ""
 
         # Останавливаем и удаляем контейнеры бота
-        if [ "\$use_compose_down" = "true" ]; then
+        if [ "$use_compose_down" = "true" ]; then
             echo "  Останавливаем все контейнеры бота через docker compose down..."
-            cd "/opt/remnawave/telegram-bots/\$bot_name"
+            cd "/opt/remnawave/telegram-bots/$bot_name"
             if docker compose down -v 2>/dev/null; then
                 echo "  ✅ Контейнеры успешно остановлены через docker compose"
             else
@@ -4245,24 +4341,24 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
         fi
         
         # Если compose down не сработал или файл отсутствует - принудительная остановка
-        if [ "\$use_compose_down" = "false" ]; then
+        if [ "$use_compose_down" = "false" ]; then
             echo "  Принудительно останавливаем и удаляем контейнеры..."
             
             # Останавливаем оба контейнера
-            for container in "\$bot_name" "\${bot_name}-db"; do
-                if docker ps -aq -f name="^\${container}$" | grep -q .; then
-                    echo "    Stopping \$container..."
-                    docker stop "\$container" 2>/dev/null || true
-                    docker rm -f "\$container" 2>/dev/null || true
+            for container in "$bot_name" "${bot_name}-db"; do
+                if docker ps -aq -f name="^${container}$" | grep -q .; then
+                    echo "    Stopping $container..."
+                    docker stop "$container" 2>/dev/null || true
+                    docker rm -f "$container" 2>/dev/null || true
                 fi
             done
         fi
 
         # Дополнительная проверка - убедимся что контейнеры удалены
-        for container in "\$bot_name" "\${bot_name}-db"; do
-            if docker ps -aq -f name="^\${container}$" | grep -q .; then
-                echo "    ⚠️  Контейнер \$container все еще существует, удаляем принудительно..."
-                docker rm -f "\$container" 2>/dev/null || true
+        for container in "$bot_name" "${bot_name}-db"; do
+            if docker ps -aq -f name="^${container}$" | grep -q .; then
+                echo "    ⚠️  Контейнер $container все еще существует, удаляем принудительно..."
+                docker rm -f "$container" 2>/dev/null || true
             fi
         done
         
@@ -4284,16 +4380,16 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
                 bot_db_wait=0
                 bot_db_max_wait=30
                 
-                until [ "\$(docker inspect --format='{{.State.Health.Status}}' "$bot_db_container" 2>/dev/null)" == "healthy" ]; do
+                until [ "$(docker inspect --format='{{.State.Health.Status}}' "$bot_db_container" 2>/dev/null)" == "healthy" ]; do
                     sleep 2
-                    bot_db_wait=\$((bot_db_wait + 1))
-                    if [ \$bot_db_wait -gt \$bot_db_max_wait ]; then
+                    bot_db_wait=$((bot_db_wait + 1))
+                    if [ $bot_db_wait -gt $bot_db_max_wait ]; then
                         echo "  ⚠️  Bot DB health check timeout"
                         break
                     fi
                 done
                 
-                if [ \$bot_db_wait -le \$bot_db_max_wait ]; then
+                if [ $bot_db_wait -le $bot_db_max_wait ]; then
                     echo "  ✓ Bot DB is healthy"
                 fi
                 
@@ -4317,7 +4413,7 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
                     continue
                 fi
                 
-                volume_name=\$(basename "$volume_archive" .tar.gz)
+                volume_name=$(basename "$volume_archive" .tar.gz)
                 echo "    Restoring volume: $volume_name"
                 
                 # Удаляем старый volume
@@ -4331,7 +4427,7 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
                     -v "$volume_name:/target" \
                     -v "$bot_dir/volumes:/source:ro" \
                     alpine \
-                    sh -c "cd /target && tar -xzf /source/\$(basename "$volume_archive")"
+                    sh -c "cd /target && tar -xzf /source/$(basename "$volume_archive")"
                     
                 if [ $? -eq 0 ]; then
                     echo "    ✅ Volume $volume_name restored"
@@ -4356,10 +4452,10 @@ if [ -d "$SCRIPT_DIR/telegram-bots" ]; then
                 bot_wait=0
                 bot_max_wait=15
                 
-                until [ "\$(docker inspect --format='{{.State.Health.Status}}' "$bot_name" 2>/dev/null)" == "healthy" ]; do
+                until [ "$(docker inspect --format='{{.State.Health.Status}}' "$bot_name" 2>/dev/null)" == "healthy" ]; do
                     sleep 2
-                    bot_wait=\$((bot_wait + 1))
-                    if [ \$bot_wait -gt \$bot_max_wait ]; then
+                    bot_wait=$((bot_wait + 1))
+                    if [ $bot_wait -gt $bot_max_wait ]; then
                         echo "  ⚠️  Bot health check timeout"
                         break
                     fi
@@ -4495,7 +4591,7 @@ cat > "$metadata_file" <<METADATA_EOF
     "management_script_included": $([ -f "$temp_backup_dir/install-script.sh" ] && echo "true" || echo "false"),
     "restore_script_included": $([ -f "$temp_backup_dir/restore-volume.sh" ] && echo "true" || echo "false"),
     "docker_images": {
-$(docker images --format '        "{{.Repository}}:{{.Tag}}": "{{.ID}}"' | grep -E "(remnawave|postgres|valkey)" | head -10 || echo '')
+$(docker images --format '"{{.Repository}}:{{.Tag}}": "{{.ID}}"' 2>/dev/null | grep -E "(remnawave|postgres|valkey)" | head -10 | awk 'NR>1{printf ",\n"} {printf "        %s", $0} END{if(NR>0)print ""}')
     },
     "system_info": {
         "hostname": "$(hostname)",
@@ -4697,8 +4793,16 @@ ${part_info}"
             return 0
         }
         
+        # Несжатый бэкап — это директория, отправить её в Telegram нельзя
+        if [ -d "$final_backup_file" ]; then
+            log_message "Backup is an uncompressed directory — skipping Telegram file upload"
+            no_file_msg="${backup_info}
+
+📁 *Backup is uncompressed (directory)* — file not sent.
+Enable compression to receive backup files in Telegram."
+            send_telegram_message "$no_file_msg" || true
         # Проверяем размер и отправляем
-        if [ "$file_size_bytes" -lt "$max_telegram_size" ] && [[ "$final_backup_file" =~ \.tar\.gz$ ]]; then
+        elif [ "$file_size_bytes" -lt "$max_telegram_size" ] && [[ "$final_backup_file" =~ \.tar\.gz$ ]]; then
             # Файл помещается в одно сообщение
             log_message "Sending file via Telegram API: $(basename "$final_backup_file") ($(du -sh "$final_backup_file" | cut -f1))"
             
@@ -4796,19 +4900,23 @@ fi
 retention_days=$(jq -r '.retention.days // 7' "$CONFIG_FILE")
 min_backups=$(jq -r '.retention.min_backups // 3' "$CONFIG_FILE")
 
-log_message "Cleaning up backups older than $retention_days days..."
+log_message "Cleaning up backups older than $retention_days days (always keeping newest $min_backups)..."
 
-# Находим старые файлы
-find "$BACKUP_DIR" -name "remnawave_scheduled_*" -type f -mtime +$retention_days -delete 2>/dev/null
-find "$BACKUP_DIR" -name "remnawave_scheduled_*" -type d -mtime +$retention_days -exec rm -rf {} + 2>/dev/null
+# Всегда сохраняем min_backups самых свежих; из остальных удаляем старше retention_days
+backup_idx=0
+removed_count=0
+while IFS= read -r old_backup; do
+    [ -e "$old_backup" ] || continue
+    backup_idx=$((backup_idx + 1))
+    if [ "$backup_idx" -le "$min_backups" ]; then
+        continue
+    fi
+    if [ -n "$(find "$old_backup" -maxdepth 0 -mtime +"$retention_days" 2>/dev/null)" ]; then
+        rm -rf "$old_backup" 2>/dev/null && removed_count=$((removed_count + 1))
+    fi
+done < <(ls -1td "$BACKUP_DIR"/remnawave_scheduled_* 2>/dev/null)
 
-# Проверяем минимальное количество
-current_backups=$(ls -1 "$BACKUP_DIR"/remnawave_scheduled_* 2>/dev/null | wc -l)
-if [ "$current_backups" -lt "$min_backups" ]; then
-    log_message "WARNING: Only $current_backups backups remain (minimum: $min_backups)"
-fi
-
-log_message "Old backups cleaned up"
+log_message "Old backups cleaned up ($removed_count removed)"
 log_message "Backup process completed successfully"
 
 # Очистка временной директории бэкапа
@@ -5592,11 +5700,17 @@ restore_from_backup() {
         local metadata_file=$(find "$temp_analysis_dir" -name "backup-metadata.json" 2>/dev/null | head -1)
         
         if [ -f "$metadata_file" ]; then
+            # jq на битом JSON возвращает пустую строку — нормализуем в "unknown"
+            # (бэкапы, сделанные backup-скриптом < 1.5.0, содержат невалидный JSON)
             original_app_name=$(jq -r '.app_name // "unknown"' "$metadata_file" 2>/dev/null)
+            [ -z "$original_app_name" ] && original_app_name="unknown"
             local backup_timestamp=$(jq -r '.timestamp // "unknown"' "$metadata_file" 2>/dev/null)
+            [ -z "$backup_timestamp" ] && backup_timestamp="unknown"
             local script_version=$(jq -r '.script_version // "unknown"' "$metadata_file" 2>/dev/null)
+            [ -z "$script_version" ] && script_version="unknown"
             local backup_type_meta=$(jq -r '.backup_type // "unknown"' "$metadata_file" 2>/dev/null)
-            
+            [ -z "$backup_type_meta" ] && backup_type_meta="unknown"
+
             backup_info="Original: $original_app_name, Created: $backup_timestamp, Version: $script_version, Type: $backup_type_meta"
             echo -e "\033[38;5;244m   ✓ Backup metadata found and valid\033[0m"
         else
@@ -6579,12 +6693,21 @@ restore_database_in_existing_installation() {
         return 1
     fi
     cd "$target_dir"
-    
+
+    # Compose из бэкапа может требовать другой мажор PostgreSQL, чем данные
+    # в существующем volume (v2-бэкап на v3-установке и наоборот)
+    if ! ensure_db_volume_pg_compatibility "$target_app_name"; then
+        return 1
+    fi
+
     echo -e "\033[38;5;250m📝 Starting database service...\033[0m"
-    
+
     # Запускаем ТОЛЬКО базу данных для восстановления
+    # (сервис в compose называется remnawave-db независимо от имени установки)
+    local db_service
+    db_service=$(get_db_service_name)
     local db_startup_log="/tmp/db_startup_$$.log"
-    if docker compose up -d "${target_app_name}-db" 2>"$db_startup_log"; then
+    if docker compose up -d "$db_service" 2>"$db_startup_log"; then
         echo -e "\033[1;32m✅ Database service started\033[0m"
         
         # Ждем готовности базы данных через healthcheck
@@ -6640,10 +6763,12 @@ restore_database_in_existing_installation() {
     local postgres_db="postgres"
     
     # Читаем настройки из env файла если доступны
+    # (-f2- не обрезает пароли со знаком '='; кавычки срезаем)
     if [ -f "$target_dir/.env" ]; then
-        postgres_user=$(grep "^POSTGRES_USER=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-        postgres_password=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
-        postgres_db=$(grep "^POSTGRES_DB=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null || echo "postgres")
+        local env_val
+        env_val=$(grep "^POSTGRES_USER=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_user="$env_val"
+        env_val=$(grep "^POSTGRES_PASSWORD=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_password="$env_val"
+        env_val=$(grep "^POSTGRES_DB=" "$target_dir/.env" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$env_val" ] && postgres_db="$env_val"
         echo -e "\033[38;5;244m   Using database credentials from .env file\033[0m"
     fi
     
@@ -6679,10 +6804,10 @@ restore_database_in_existing_installation() {
     echo -e "\033[38;5;244m   Importing backup data ($(du -sh "$database_file" | cut -f1))...\033[0m"
     local restore_log="/tmp/restore_db_$$.log"
     local restore_errors="/tmp/restore_errors_$$.log"
-    local restore_errors_file="${target_app_dir}/logs/restore_errors_$(date +%Y%m%d_%H%M%S).log"
-    
+    local restore_errors_file="${target_dir}/logs/restore_errors_$(date +%Y%m%d_%H%M%S).log"
+
     # Создаем директорию для логов
-    mkdir -p "${target_app_dir}/logs"
+    mkdir -p "${target_dir}/logs"
     
     log_restore_operation "Database Import" "STARTED" "Importing $(du -sh "$database_file" | cut -f1) of data"
     
@@ -10650,12 +10775,15 @@ backup_command() {
         exit 1
     fi
 
-    # Создаём backup скрипт если не существует
+    # Создаём backup скрипт если не существует или устарел
     if [ ! -f "$BACKUP_SCRIPT_FILE" ]; then
         echo -e "\033[38;5;250m📝 Creating backup script...\033[0m"
         schedule_create_backup_script
+    elif ! check_backup_script_version; then
+        echo -e "\033[38;5;250m📝 Updating backup script to v$BACKUP_SCRIPT_VERSION...\033[0m"
+        schedule_create_backup_script
     fi
-    
+
     # Убедимся что есть конфиг
     if ! ensure_backup_dirs; then
         colorized_echo red "Failed to create backup directories!"
