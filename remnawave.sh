@@ -948,6 +948,73 @@ check_compose_v588_migration_needed() {
 # v3 replaces JWT_AUTH_SECRET/JWT_API_TOKENS_SECRET with a single APP_SECRET
 # (value must be kept from JWT_AUTH_SECRET) and drops SWAGGER_PATH/SCALAR_PATH/
 # IS_DOCS_ENABLED (docs moved to fixed paths under /api/backend-tools).
+# Migration runs only during update and only after the target backend version
+# is confirmed (pulled image inspection, tag as fallback).
+
+get_backend_image_ref() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        return 1
+    fi
+
+    grep -E "image:[[:space:]]*['\"]?(ghcr\.io/)?remnawave/backend" "$COMPOSE_FILE" 2>/dev/null | \
+        head -1 | sed "s/.*image:[[:space:]]*//" | tr -d "'\"" | awk '{print $1}'
+}
+
+# Version of a LOCAL docker image (call after pull). Tries the OCI version
+# label first, then extracts package.json without running the container.
+get_image_panel_version() {
+    local image="$1"
+    local version=""
+
+    version=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image" 2>/dev/null)
+    if [ "$version" = "<no value>" ]; then
+        version=""
+    fi
+
+    if [ -z "$version" ]; then
+        local workdir cid
+        workdir=$(docker image inspect --format '{{.Config.WorkingDir}}' "$image" 2>/dev/null)
+        [ -z "$workdir" ] && workdir="/opt/app"
+        cid=$(docker create "$image" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            version=$(docker cp "$cid:$workdir/package.json" - 2>/dev/null | tar -xO 2>/dev/null | \
+                grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+            docker rm -f "$cid" >/dev/null 2>&1
+        fi
+    fi
+
+    version="${version#v}"
+    if [ -z "$version" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    echo "$version"
+}
+
+# Major version of the backend image referenced in docker-compose.yml.
+# Prints "3", "2", ... or "unknown". Image inspection first, tag as fallback.
+get_target_backend_major() {
+    local image version
+    image=$(get_backend_image_ref)
+    if [ -z "$image" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    version=$(get_image_panel_version "$image")
+    if [ "$version" != "unknown" ]; then
+        echo "${version%%.*}"
+        return 0
+    fi
+
+    case "${image##*:}" in
+        3|3.*) echo "3" ;;
+        2|2.*) echo "2" ;;
+        1|1.*) echo "1" ;;
+        *) echo "unknown"; return 1 ;;
+    esac
+}
 
 check_env_v3_migration_needed() {
     if [ ! -f "$ENV_FILE" ]; then
@@ -993,11 +1060,10 @@ APP_SECRET=$jwt_secret\\
     sed -i "s|^### JWT ###$|### JWT (legacy, panel v2 only — removed automatically after v3 upgrade) ###|" "$ENV_FILE"
 
     echo -e "\033[1;32m🎉 v3.0.0 .env migration completed!\033[0m"
-    echo -e "\033[38;5;250m   Legacy JWT_* variables kept for now; they will be cleaned up\033[0m"
-    echo -e "\033[38;5;250m   automatically once the panel is running v3.\033[0m"
 }
 
-check_env_v3_legacy_cleanup_needed() {
+# Light check: transitional state (APP_SECRET added, legacy vars still present)
+check_env_v3_has_legacy_vars() {
     if [ ! -f "$ENV_FILE" ]; then
         return 1
     fi
@@ -1008,16 +1074,18 @@ check_env_v3_legacy_cleanup_needed() {
     fi
 
     local legacy_vars=(JWT_AUTH_SECRET JWT_API_TOKENS_SECRET SWAGGER_PATH SCALAR_PATH IS_DOCS_ENABLED)
-    local found_legacy=false
     local var
     for var in "${legacy_vars[@]}"; do
         if grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
-            found_legacy=true
-            break
+            return 0
         fi
     done
 
-    if [ "$found_legacy" = false ]; then
+    return 1
+}
+
+check_env_v3_legacy_cleanup_needed() {
+    if ! check_env_v3_has_legacy_vars; then
         return 1
     fi
 
@@ -1039,8 +1107,11 @@ check_env_v3_legacy_cleanup_needed() {
     return 1
 }
 
+# Removes legacy v2 vars. Version gating is the CALLER's responsibility:
+# call either after check_env_v3_legacy_cleanup_needed (running panel is v3),
+# or directly when the just-pulled target image is confirmed v3+.
 cleanup_env_v3_legacy() {
-    if ! check_env_v3_legacy_cleanup_needed; then
+    if ! check_env_v3_has_legacy_vars; then
         return 0
     fi
 
@@ -12948,12 +13019,6 @@ update_command() {
         images_need_update=true
     fi
 
-    # Panel v3.0.0: .env migration (APP_SECRET)
-    local has_env_v3_migration=false
-    if check_env_v3_migration_needed; then
-        has_env_v3_migration=true
-    fi
-
     # Если нет обновлений образов
     if [ "$images_need_update" = false ]; then
         echo
@@ -12993,10 +13058,7 @@ update_command() {
             migrate_compose_v588
         fi
 
-        # v3.0.0 миграция .env (APP_SECRET) и очистка legacy-переменных
-        if [ "$has_env_v3_migration" = true ]; then
-            migrate_env_v3
-        fi
+        # v3.0.0: очистка legacy-переменных (только если панель уже работает на v3)
         if check_env_v3_legacy_cleanup_needed; then
             cleanup_env_v3_legacy
         fi
@@ -13065,10 +13127,27 @@ update_command() {
         migrate_compose_v588
         env_migrated=true
     fi
-    # v3.0.0 .env migration (APP_SECRET replaces JWT secrets)
+    # v3.0.0 .env migration (APP_SECRET replaces JWT secrets) — version-checked:
+    # runs only when the just-pulled backend image is confirmed v3+
     if check_env_v3_migration_needed; then
-        migrate_env_v3
-        env_migrated=true
+        local target_backend_major
+        target_backend_major=$(get_target_backend_major)
+        if [ "$target_backend_major" != "unknown" ] && [ "$target_backend_major" -ge 3 ] 2>/dev/null; then
+            echo -e "\033[38;5;244m   Pulled backend image is v${target_backend_major}.x — migrating .env to v3 format\033[0m"
+            migrate_env_v3
+            cleanup_env_v3_legacy
+            env_migrated=true
+        elif [ "$target_backend_major" = "unknown" ]; then
+            # Target version undetectable — add APP_SECRET but keep legacy vars
+            # (extra vars are harmless for both v2 and v3)
+            echo -e "\033[1;33m   ⚠️  Could not detect target backend version — applying safe transitional migration\033[0m"
+            migrate_env_v3
+            echo -e "\033[38;5;250m   Legacy JWT_* variables kept for now; they will be removed\033[0m"
+            echo -e "\033[38;5;250m   automatically once the panel is confirmed running v3.\033[0m"
+            env_migrated=true
+        else
+            echo -e "\033[38;5;244m   Backend stays on v${target_backend_major}.x — .env migration not needed\033[0m"
+        fi
     fi
     if [ "$env_migrated" = false ]; then
         echo -e "\033[38;5;244m   Environment is clean\033[0m"
