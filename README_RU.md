@@ -37,7 +37,7 @@ bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/selfsteal
 |---|---|---|
 | 🚀 **remnawave.sh** | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
 | 🛰 **remnanode.sh** | Нода: Xray-core, логи, автоперезапуск | этот файл |
-| 🎭 **selfsteal.sh** | Caddy-маскировка для Reality, 8 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
+| 🎭 **selfsteal.sh** | Caddy-маскировка для Reality, 11 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | WARP + Tor: WireGuard-outbound для Xray, WARP+ | [README-warp](./README-warp.md) |
 | 🐦 **netbird.sh** | NetBird mesh-VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
@@ -138,7 +138,7 @@ remnanode xray_log_err    # ошибки Xray в реальном времени
 
 <div align="center"><img src="assets/preview-selfsteal.svg" alt="Меню selfsteal" width="640"></div>
 
-- **8 шаблонов сайтов** для камуфляжа: соцсети, конвертеры, файлообменники, спидтест и др.
+- **11 шаблонов сайтов** для камуфляжа: соцсети, конвертеры, файлообменники, спидтест и др.
 - **Антифингерпринт** — каждый шаблон уникализируется при установке (нет байт-в-байт совпадений), следы происхождения вырезаются
 - **Встроенный гайд** по интеграции с Reality (`selfsteal guide`)
 
@@ -172,6 +172,8 @@ sudo wtm    # меню; или: wtm install-all / warp-plus / status
 Полная документация: **[README-warp.md](./README-warp.md)**
 
 ## 🐦 NetBird
+
+<div align="center"><img src="assets/preview-netbird.svg" alt="Меню netbird" width="640"></div>
 
 Установщик [NetBird](https://netbird.io/) mesh-VPN: CLI, cloud-init, интерактивное меню, Ansible-режим.
 

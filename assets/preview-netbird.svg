@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="389" viewBox="0 0 640 389" role="img" aria-label="netbird.sh — NetBird Installer">
+<rect x="0.5" y="0.5" width="639" height="388" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0.5 10.5 a10 10 0 0 1 10-10 h619 a10 10 0 0 1 10 10 v26 h-639 z" fill="#161b22"/>
+<line x1="0.5" y1="36" x2="639.5" y2="36" stroke="#30363d"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f56"/>
+<circle cx="40" cy="18" r="6" fill="#ffbd2e"/>
+<circle cx="60" cy="18" r="6" fill="#27c93f"/>
+<text x="320" y="22" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#8b949e">netbird.sh — NetBird Installer</text>
+<text x="22" y="56" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">🐦 NetBird Installer </tspan><tspan fill="#8b949e">v1.4.2</tspan></text>
+<line x1="22" y1="72" x2="618" y2="72" stroke="#484f58" stroke-dasharray="1 0" stroke-width="1"/>
+<text x="22" y="90" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#3fb950" font-weight="600">✅ NetBird: Connected </tspan><tspan fill="#8b949e">· peer 100.92.x.x · SSH policy on</tspan></text>
+<line x1="22" y1="106" x2="618" y2="106" stroke="#484f58" stroke-dasharray="1 0" stroke-width="1"/>
+<text x="22" y="124" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">📋 Меню:</tspan></text>
+<text x="22" y="145" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   1)  </tspan><tspan fill="#8b949e">🚀 Установить NetBird</tspan></text>
+<text x="22" y="166" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   2)  </tspan><tspan fill="#8b949e">🔄 Обновить NetBird</tspan></text>
+<text x="22" y="187" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   3)  </tspan><tspan fill="#8b949e">🔗 Подключить к сети</tspan></text>
+<text x="22" y="208" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   4)  </tspan><tspan fill="#8b949e">🔌 Отключить от сети</tspan></text>
+<text x="22" y="229" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   5)  </tspan><tspan fill="#8b949e">📊 Показать статус</tspan></text>
+<text x="22" y="250" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   6)  </tspan><tspan fill="#8b949e">🗑️  Удалить NetBird</tspan></text>
+<line x1="22" y1="266" x2="618" y2="266" stroke="#484f58" stroke-dasharray="1 0" stroke-width="1"/>
+<text x="22" y="284" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">   0)  </tspan><tspan fill="#8b949e">🚪 Выход</tspan></text>
+<text x="22" y="305" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#484f58">CLI / cloud-init / Ansible: netbird.sh init|install|status --key …</tspan></text>
+<text x="22" y="326" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">Выберите пункт [0-6]: </tspan><tspan fill="#3fb950">▊</tspan></text>
+</svg>

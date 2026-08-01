@@ -189,7 +189,7 @@ render("assets/preview-selfsteal.svg", "selfsteal — Reality Masking", 640, [
     [N("4"), ("🔄 Restart services", "gray")],
     [N("5"), ("📊 Service status", "gray")],
     [H("🎨 Website Management:")],
-    [N("6"), ("🎨 Website templates ", "gray"), ("(8 built-in, randomized)", "purple")],
+    [N("6"), ("🎨 Website templates ", "gray"), ("(11 built-in, randomized)", "purple")],
     [N("7"), ("📖 Setup guide & examples", "gray")],
     [H("📝 Logs & Monitoring:")],
     [N("8"), ("📝 View logs", "gray")],
@@ -229,6 +229,25 @@ render("assets/preview-wtm.svg", "wtm — WARP & Tor Manager", 640, [
     [N("0"), ("🚪 Exit", "gray")],
     [("WARP & Tor Manager • Network Proxy Solutions", "dim")],
     [("Select option [0-9]: ", "white", True), ("▊", "green")],
+])
+
+# ---------------------------------------------------------------- netbird
+render("assets/preview-netbird.svg", "netbird.sh — NetBird Installer", 640, [
+    [("🐦 NetBird Installer ", "white", True), ("v1.4.2", "gray")],
+    "SEP",
+    [("✅ NetBird: Connected ", "green", True), ("· peer 100.92.x.x · SSH policy on", "gray")],
+    "SEP",
+    [H("📋 Меню:")],
+    [N("1"), ("🚀 Установить NetBird", "gray")],
+    [N("2"), ("🔄 Обновить NetBird", "gray")],
+    [N("3"), ("🔗 Подключить к сети", "gray")],
+    [N("4"), ("🔌 Отключить от сети", "gray")],
+    [N("5"), ("📊 Показать статус", "gray")],
+    [N("6"), ("🗑️  Удалить NetBird", "gray")],
+    "SEP",
+    [N("0"), ("🚪 Выход", "gray")],
+    [("CLI / cloud-init / Ansible: netbird.sh init|install|status --key …", "dim")],
+    [("Выберите пункт [0-6]: ", "white", True), ("▊", "green")],
 ])
 
 # ---------------------------------------------------------------- hero
