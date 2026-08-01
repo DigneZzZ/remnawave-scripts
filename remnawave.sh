@@ -13060,6 +13060,298 @@ create_pre_update_backup() {
     return 1
 }
 
+# ===== POSTGRESQL MAJOR UPGRADE =====
+# Remnawave v3's upstream compose ships postgres:18, but the v3.0.0 release notes
+# never require upgrading an existing cluster — the panel runs fine on 17.
+# A major PG upgrade is destructive by nature (incompatible data dir + the pg18
+# image moved the mount from /var/lib/postgresql/data to /var/lib/postgresql),
+# so this is an explicit opt-in command, never part of update/restore.
+
+PG_TARGET_IMAGE="postgres:18.4"
+PG_TARGET_MAJOR="18"
+
+# Current PostgreSQL major according to docker-compose.yml. Prints "" if unknown.
+get_compose_pg_major() {
+    local compose="${1:-$COMPOSE_FILE}"
+    grep -Eo "image:[[:space:]]*['\"]?postgres:[0-9]+" "$compose" 2>/dev/null | head -1 | grep -Eo '[0-9]+$'
+}
+
+# Rewrite the db service to the target PostgreSQL image and mount layout.
+# pg18 stores the cluster under /var/lib/postgresql (not .../data) and wants shm_size.
+rewrite_compose_for_pg18() {
+    local compose="$1"
+    local app_name="$2"
+
+    sed -i -E "s|(image:[[:space:]]*['\"]?)postgres:[0-9]+(\.[0-9]+)*(['\"]?)|\1${PG_TARGET_IMAGE}\3|" "$compose"
+    sed -i -E "s|(- ${app_name}-db-data:/var/lib/postgresql)/data([[:space:]]*)$|\1\2|" "$compose"
+
+    # shm_size helps pg18 with larger sorts/joins; add it next to the db image line if absent
+    if ! grep -q "shm_size" "$compose" 2>/dev/null; then
+        local img_line indent
+        img_line=$(grep -n "image:.*${PG_TARGET_IMAGE}" "$compose" | head -1 | cut -d: -f1)
+        if [ -n "$img_line" ]; then
+            indent=$(sed -n "${img_line}s/^\([[:space:]]*\).*/\1/p" "$compose")
+            sed -i "${img_line}a\\${indent}shm_size: 512mb" "$compose"
+        fi
+    fi
+}
+
+upgrade_postgres_command() {
+    check_running_as_root
+    detect_compose
+
+    if ! is_remnawave_installed; then
+        echo -e "\033[1;31m❌ Remnawave not installed!\033[0m"
+        exit 1
+    fi
+
+    local force=false
+    if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then
+        force=true
+    fi
+
+    echo -e "\033[1;37m🐘 PostgreSQL Major Upgrade\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
+    echo
+
+    local current_major
+    current_major=$(get_compose_pg_major)
+    if [ -z "$current_major" ]; then
+        echo -e "\033[1;31m❌ Cannot determine the PostgreSQL version from docker-compose.yml\033[0m"
+        echo -e "\033[38;5;244m   Expected an 'image: postgres:<major>' line in the db service\033[0m"
+        exit 1
+    fi
+
+    if [ "$current_major" -ge "$PG_TARGET_MAJOR" ] 2>/dev/null; then
+        echo -e "\033[1;32m✅ Already on PostgreSQL $current_major — nothing to do\033[0m"
+        exit 0
+    fi
+
+    local db_container="${APP_NAME}-db"
+    local volume_name="${APP_NAME}-db-data"
+
+    echo -e "\033[1;37m📋 Plan:\033[0m"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s → %s\033[0m\n" "PostgreSQL:" "$current_major" "$PG_TARGET_MAJOR"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "Method:" "pg_dumpall → fresh volume → restore"
+    printf "   \033[38;5;15m%-22s\033[0m \033[38;5;250m%s\033[0m\n" "Volume:" "$volume_name (old data copied aside first)"
+    echo
+    echo -e "\033[1;33m⚠️  Important:\033[0m"
+    echo -e "\033[38;5;250m   • Remnawave v3 works fine on PostgreSQL $current_major — this upgrade is OPTIONAL\033[0m"
+    echo -e "\033[38;5;250m   • The panel will be DOWN for the whole procedure (minutes on large DBs)\033[0m"
+    echo -e "\033[38;5;250m   • A verified SQL dump and a copy of the old volume are kept for rollback\033[0m"
+    echo
+
+    if [ "$force" != true ]; then
+        read -p "Type 'upgrade' to proceed: " -r confirm
+        if [ "$confirm" != "upgrade" ]; then
+            echo -e "\033[1;33m⚠️  Cancelled\033[0m"
+            exit 0
+        fi
+    fi
+
+    cd "$APP_DIR" || { echo -e "\033[1;31m❌ Cannot access $APP_DIR\033[0m"; exit 1; }
+
+    # DB credentials are needed for readiness checks, the dump and the import
+    local pg_user="postgres" pg_pass="postgres" pg_db="postgres" v
+    if [ -f "$ENV_FILE" ]; then
+        v=$(grep "^POSTGRES_USER=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_user="$v"
+        v=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_pass="$v"
+        v=$(grep "^POSTGRES_DB=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/^"//;s/"$//'); [ -n "$v" ] && pg_db="$v"
+    fi
+
+    # --- Step 1: make sure the OLD database is running so we can dump it -------
+    echo
+    echo -e "\033[38;5;250m📝 Step 1:\033[0m Starting the current database..."
+    local db_service
+    db_service=$(get_db_service_name)
+    $COMPOSE -f "$COMPOSE_FILE" up -d "$db_service" >/dev/null 2>&1
+
+    local attempts=0
+    while [ $attempts -lt 60 ]; do
+        if docker exec "$db_container" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    if [ $attempts -ge 60 ]; then
+        echo -e "\033[1;31m❌ Database did not become ready — aborting (nothing was changed)\033[0m"
+        exit 1
+    fi
+    echo -e "\033[1;32m✅ Database is up\033[0m"
+
+    # --- Step 2: full logical dump (pg_dumpall keeps roles + all databases) ----
+    local ts backup_dir
+    ts=$(date +%Y%m%d_%H%M%S)
+    backup_dir="$APP_DIR/backups/pre-pg${current_major}-to-pg${PG_TARGET_MAJOR}-$ts"
+    mkdir -p "$backup_dir"
+
+    echo -e "\033[38;5;250m📝 Step 2:\033[0m Creating full cluster dump (pg_dumpall)..."
+    local dump_file="$backup_dir/cluster.sql"
+    if ! docker exec -e PGPASSWORD="$pg_pass" "$db_container" pg_dumpall -U "$pg_user" > "$dump_file" 2>"$backup_dir/dump-errors.log"; then
+        echo -e "\033[1;31m❌ pg_dumpall failed — aborting (nothing was changed)\033[0m"
+        head -5 "$backup_dir/dump-errors.log" 2>/dev/null | sed 's/^/     /'
+        exit 1
+    fi
+
+    # A valid cluster dump must contain the schema and remnawave's own tables
+    local dump_size
+    dump_size=$(wc -c < "$dump_file" 2>/dev/null || echo 0)
+    if [ "$dump_size" -lt 1000 ] || ! grep -qE "CREATE (TABLE|DATABASE|ROLE)" "$dump_file" 2>/dev/null; then
+        echo -e "\033[1;31m❌ Dump looks incomplete (${dump_size} bytes) — aborting\033[0m"
+        exit 1
+    fi
+    cp "$ENV_FILE" "$backup_dir/" 2>/dev/null
+    cp "$COMPOSE_FILE" "$backup_dir/docker-compose.yml.bak" 2>/dev/null
+    echo -e "\033[1;32m✅ Dump created: $(du -sh "$dump_file" | cut -f1) → $backup_dir\033[0m"
+
+    # --- Step 3: stop everything and set the old volume aside -----------------
+    echo -e "\033[38;5;250m📝 Step 3:\033[0m Stopping services and preserving the old volume..."
+    $COMPOSE -f "$COMPOSE_FILE" down >/dev/null 2>&1
+
+    local backup_volume="${volume_name}-pg${current_major}-$ts"
+    if docker volume create "$backup_volume" >/dev/null 2>&1 && \
+       docker run --rm -v "$volume_name":/from:ro -v "$backup_volume":/to alpine \
+            sh -c "cd /from && cp -a . /to/" >/dev/null 2>&1; then
+        echo -e "\033[1;32m✅ Old volume copied to '$backup_volume'\033[0m"
+    else
+        docker volume rm "$backup_volume" >/dev/null 2>&1
+        backup_volume=""
+        echo -e "\033[1;33m⚠️  Could not copy the old volume (disk space?) — relying on the SQL dump\033[0m"
+        if [ "$force" != true ]; then
+            read -p "Continue with the SQL dump as the only fallback? [y/N]: " -r cont
+            if [[ ! $cont =~ ^[Yy]$ ]]; then
+                echo -e "\033[1;33m⚠️  Cancelled — restarting services unchanged\033[0m"
+                $COMPOSE -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
+                exit 0
+            fi
+        fi
+    fi
+
+    # --- Step 4: switch compose to pg18 and recreate the volume ---------------
+    echo -e "\033[38;5;250m📝 Step 4:\033[0m Switching to $PG_TARGET_IMAGE and recreating the volume..."
+    rewrite_compose_for_pg18 "$COMPOSE_FILE" "$APP_NAME"
+
+    if ! docker volume rm "$volume_name" >/dev/null 2>&1; then
+        echo -e "\033[1;31m❌ Could not remove volume '$volume_name'\033[0m"
+        cp "$backup_dir/docker-compose.yml.bak" "$COMPOSE_FILE"
+        $COMPOSE -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
+        exit 1
+    fi
+
+    # --- Step 5: start pg18 and load the dump ---------------------------------
+    echo -e "\033[38;5;250m📝 Step 5:\033[0m Starting PostgreSQL $PG_TARGET_MAJOR and importing data..."
+    if ! $COMPOSE -f "$COMPOSE_FILE" up -d "$db_service" >/dev/null 2>&1; then
+        echo -e "\033[1;31m❌ Failed to start PostgreSQL $PG_TARGET_MAJOR\033[0m"
+        pg_upgrade_rollback "$backup_dir" "$volume_name" "$backup_volume"
+        exit 1
+    fi
+
+    attempts=0
+    while [ $attempts -lt 90 ]; do
+        if docker exec "$db_container" pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    if [ $attempts -ge 90 ]; then
+        echo -e "\033[1;31m❌ PostgreSQL $PG_TARGET_MAJOR did not become ready\033[0m"
+        docker logs --tail 15 "$db_container" 2>&1 | sed 's/^/     /'
+        pg_upgrade_rollback "$backup_dir" "$volume_name" "$backup_volume"
+        exit 1
+    fi
+
+    # pg_dumpall recreates roles/databases the entrypoint already made, so a few
+    # "already exists" errors are expected — we verify by data, not by exit code.
+    docker exec -i -e PGPASSWORD="$pg_pass" "$db_container" psql -U "$pg_user" -d postgres \
+        < "$dump_file" >"$backup_dir/restore.log" 2>&1 || true
+
+    local table_count
+    table_count=$(docker exec -e PGPASSWORD="$pg_pass" "$db_container" \
+        psql -U "$pg_user" -d postgres -t -c \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ')
+
+    if [ -z "$table_count" ] || [ "$table_count" -lt 5 ] 2>/dev/null; then
+        echo -e "\033[1;31m❌ Import verification failed (tables found: ${table_count:-0})\033[0m"
+        echo -e "\033[38;5;244m   See $backup_dir/restore.log\033[0m"
+        pg_upgrade_rollback "$backup_dir" "$volume_name" "$backup_volume"
+        exit 1
+    fi
+    echo -e "\033[1;32m✅ Data imported and verified ($table_count tables)\033[0m"
+
+    # --- Step 6: bring everything back up -------------------------------------
+    echo -e "\033[38;5;250m📝 Step 6:\033[0m Starting all services..."
+    $COMPOSE -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
+
+    # Check the PANEL container specifically. is_remnawave_up() only asks whether
+    # any compose container is running — the DB alone would satisfy it and we'd
+    # print success even if the panel never came back.
+    local panel_state=""
+    attempts=0
+    while [ $attempts -lt 45 ]; do
+        panel_state=$(docker inspect "$APP_NAME" \
+            --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null)
+        if [ "$panel_state" = "healthy" ] || [ "$panel_state" = "running" ]; then
+            break
+        fi
+        sleep 2
+        attempts=$((attempts + 1))
+    done
+
+    if [ "$panel_state" != "healthy" ] && [ "$panel_state" != "running" ]; then
+        echo
+        echo -e "\033[1;31m❌ Database upgraded, but the panel container did not come up (state: ${panel_state:-unknown})\033[0m"
+        echo -e "\033[38;5;244m   Logs:      sudo $APP_NAME logs\033[0m"
+        echo -e "\033[38;5;244m   Dump/cfg:  $backup_dir\033[0m"
+        [ -n "$backup_volume" ] && echo -e "\033[38;5;244m   Old data:  volume '$backup_volume' (kept for rollback)\033[0m"
+        echo -e "\033[38;5;244m   The data import itself was verified ($table_count tables).\033[0m"
+        log_restore_operation "PG Upgrade" "WARNING" "DB upgraded but panel did not start (state: ${panel_state:-unknown})"
+        exit 1
+    fi
+
+    echo
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
+    echo -e "\033[1;32m🎉 PostgreSQL upgraded: $current_major → $PG_TARGET_MAJOR\033[0m"
+    echo -e "\033[38;5;250m   Panel container: $panel_state\033[0m"
+    echo -e "\033[38;5;250m   Dump & old config: $backup_dir\033[0m"
+    if [ -n "$backup_volume" ]; then
+        echo -e "\033[38;5;250m   Old data volume:   $backup_volume\033[0m"
+        echo -e "\033[38;5;244m   Remove it once everything looks good: docker volume rm $backup_volume\033[0m"
+    fi
+    echo -e "\033[38;5;244m   Verify now: sudo $APP_NAME status && sudo $APP_NAME logs\033[0m"
+    echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
+}
+
+# Restore the pre-upgrade state: old compose, old volume data, services up.
+pg_upgrade_rollback() {
+    local backup_dir="$1"
+    local volume_name="$2"
+    local backup_volume="$3"
+
+    echo -e "\033[1;33m⏪ Rolling back to the previous PostgreSQL...\033[0m"
+
+    $COMPOSE -f "$COMPOSE_FILE" down >/dev/null 2>&1
+    [ -f "$backup_dir/docker-compose.yml.bak" ] && cp "$backup_dir/docker-compose.yml.bak" "$COMPOSE_FILE"
+
+    if [ -n "$backup_volume" ] && docker volume inspect "$backup_volume" >/dev/null 2>&1; then
+        docker volume rm "$volume_name" >/dev/null 2>&1
+        docker volume create "$volume_name" >/dev/null 2>&1
+        if docker run --rm -v "$backup_volume":/from:ro -v "$volume_name":/to alpine \
+                sh -c "cd /from && cp -a . /to/" >/dev/null 2>&1; then
+            echo -e "\033[1;32m✅ Old database volume restored\033[0m"
+        else
+            echo -e "\033[1;31m❌ Volume restore failed — data is still in '$backup_volume'\033[0m"
+        fi
+    else
+        echo -e "\033[1;33m⚠️  No volume copy available — restore manually from the dump:\033[0m"
+        echo -e "\033[38;5;244m   $backup_dir/cluster.sql\033[0m"
+    fi
+
+    $COMPOSE -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
+    echo -e "\033[38;5;244m   Previous state restored. Upgrade artifacts kept in $backup_dir\033[0m"
+}
+
 update_command() {
     check_running_as_root
     if ! is_remnawave_installed; then
@@ -13315,6 +13607,14 @@ update_command() {
     # v3.0.0: once the panel is confirmed running v3, drop legacy v2 variables
     if check_env_v3_legacy_cleanup_needed; then
         cleanup_env_v3_legacy
+    fi
+
+    # Non-blocking hint: pg18 ships with upstream v3 compose but is NOT required —
+    # the upgrade is a separate, explicit command (never bundled into update).
+    local pg_major_now
+    pg_major_now=$(get_compose_pg_major)
+    if [ -n "$pg_major_now" ] && [ "$pg_major_now" -lt "$PG_TARGET_MAJOR" ] 2>/dev/null; then
+        echo -e "\033[38;5;244m   ℹ️  PostgreSQL $pg_major_now in use; optional upgrade to $PG_TARGET_MAJOR: sudo $APP_NAME upgrade-postgres\033[0m"
     fi
 
     # === Итог ===
@@ -13976,7 +14276,8 @@ usage() {
     echo -e "\033[1;37m💾 Backup & Restore:\033[0m"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "backup" "💾 Manual database backup"
     printf "   \033[38;5;178m%-18s\033[0m %s\n" "schedule" "📅 Scheduled backup system"
-    printf "   \033[38;5;178m%-18s\033[0m %s\n" "restore" "🔄 Restore from backup" 
+    printf "   \033[38;5;178m%-18s\033[0m %s\n" "restore" "🔄 Restore from backup"
+    printf "   \033[38;5;178m%-18s\033[0m %s\n" "upgrade-postgres" "🐘 Upgrade PostgreSQL to 18 (optional)"
     echo
 
     echo -e "\033[1;37m🔧 Configuration & Access:\033[0m"
@@ -14369,6 +14670,7 @@ case "$COMMAND" in
     pm2-monitor) pm2_monitor ;;
     backup) backup_command "$@" ;;
     restore) restore_command "$@" ;;
+    upgrade-postgres) upgrade_postgres_command "$@" ;;
     subpage) subpage_command ;;
     subpage-restart) subpage_restart_command ;;
     subpage-token) subpage_configure_token ;;

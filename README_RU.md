@@ -69,6 +69,7 @@ remnawave backup       # бэкап вручную (или `schedule` — по �
 | `up` / `down` / `restart` / `status` / `logs` | Управление сервисами |
 | `update` | Обновление скрипта и контейнеров с миграциями |
 | `backup` / `restore` / `schedule` | Бэкапы: вручную, восстановление, cron |
+| `upgrade-postgres` | Опциональный апгрейд PostgreSQL 17 → 18 (дамп → новый volume → рестор, с откатом) |
 | `edit` / `edit-env` / `console` | compose, .env, консоль панели |
 | `subpage` / `subpage-token` / `subpage-restart` | Управление subscription-page |
 | `install-subpage-standalone --with-caddy` | Subpage на отдельном сервере |
