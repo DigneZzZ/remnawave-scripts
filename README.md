@@ -37,7 +37,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 |---|---|---|
 | 🚀 **remnawave.sh** | Panel: install, Caddy, backups, subscription-page | this file |
 | 🛰 **remnanode.sh** | Node: Xray-core, logs, auto-restart | this file |
-| 🎭 **selfsteal.sh** | Caddy masking for Reality, 8 website templates | [README-selfsteal](./README-selfsteal.md) |
+| 🎭 **selfsteal.sh** | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
 | 🐦 **netbird.sh** | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
@@ -137,7 +137,7 @@ remnanode xray_log_err    # real-time Xray errors
 
 <div align="center"><img src="assets/preview-selfsteal.svg" alt="selfsteal menu" width="640"></div>
 
-- **8 website templates** for camouflage: social, converters, file clouds, speedtest, and more
+- **11 website templates** for camouflage: social, converters, file clouds, speedtest, and more
 - **Anti-fingerprint** — every template is uniquified on install (no byte-identical copies), provenance traces stripped
 - **Built-in guide** for Reality integration (`selfsteal guide`)
 
@@ -171,6 +171,8 @@ sudo wtm    # menu; or: wtm install-all / warp-plus / status
 Full documentation: **[README-warp.md](./README-warp.md)**
 
 ## 🐦 NetBird
+
+<div align="center"><img src="assets/preview-netbird.svg" alt="netbird menu" width="640"></div>
 
 Installer for [NetBird](https://netbird.io/) mesh VPN: CLI, cloud-init, interactive menu, Ansible mode.
 
