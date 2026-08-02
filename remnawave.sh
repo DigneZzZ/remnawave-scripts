@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.4.1
+# VERSION=6.5.0
 
-SCRIPT_VERSION="6.4.1"
+SCRIPT_VERSION="6.5.0"
 BACKUP_SCRIPT_VERSION="1.5.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -10305,9 +10305,12 @@ install_remnawave() {
     # Ask about PANEL_DOMAIN (optional)
     read -p "Enter PANEL_DOMAIN (optional, e.g., panel.example.com): " -r PANEL_DOMAIN
 
-    # Determine image tag based on --dev flag
-    # Pin to major version 3 (matches upstream docker-compose-prod.yml)
-    BACKEND_IMAGE_TAG="3"
+    # Determine image tag based on --dev flag.
+    # Deliberately NOT pinned to a major: a pinned tag silently stops delivering
+    # updates once the next major ships, and `update` would keep reporting
+    # "everything is up to date". Major jumps are gated at update time instead
+    # (see the major-version guard in update_command).
+    BACKEND_IMAGE_TAG="latest"
     if [ "$USE_DEV_BRANCH" == "true" ]; then
         BACKEND_IMAGE_TAG="dev"
     fi
@@ -13519,7 +13522,43 @@ update_command() {
         exit 1
     fi
     echo -e "\033[1;32m✅ Images downloaded successfully\033[0m"
-    
+
+    # === Major-version guard ===
+    # The backend image is tracked by a floating tag, so a new MAJOR (with
+    # breaking DB migrations) can arrive at any time. Applying that silently is
+    # exactly what pinning was meant to prevent — instead we detect the jump
+    # here, after the pull but before containers are recreated, and require an
+    # explicit confirmation. Declining leaves the running containers untouched.
+    local running_major pulled_major
+    running_major=$(get_panel_version 2>/dev/null)
+    running_major="${running_major%%.*}"
+    pulled_major=$(get_target_backend_major)
+
+    if [ -n "$running_major" ] && [ "$running_major" != "unknown" ] && \
+       [ "$pulled_major" != "unknown" ] && [ "$pulled_major" -gt "$running_major" ] 2>/dev/null; then
+        echo
+        echo -e "\033[1;33m⚠️  MAJOR version jump detected: v${running_major}.x → v${pulled_major}.x\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
+        echo -e "\033[38;5;250m   A major release can contain breaking changes and irreversible\033[0m"
+        echo -e "\033[38;5;250m   database migrations. Read the release notes before continuing:\033[0m"
+        echo -e "\033[38;5;244m   https://github.com/remnawave/backend/releases\033[0m"
+        echo -e "\033[38;5;244m   https://f.docs.rw\033[0m"
+        echo
+        echo -e "\033[38;5;250m   A safety backup was just created under: $APP_DIR/backups/\033[0m"
+        echo -e "\033[38;5;250m   Downgrading afterwards requires restoring that backup.\033[0m"
+        echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
+        echo
+        read -p "Type '$pulled_major' to apply the major upgrade (anything else cancels): " -r major_confirm
+        if [ "$major_confirm" != "$pulled_major" ]; then
+            echo -e "\033[1;33m⚠️  Major upgrade cancelled — running containers left untouched\033[0m"
+            echo -e "\033[38;5;244m   The new image is downloaded; re-run '$APP_NAME update' when ready.\033[0m"
+            echo -e "\033[38;5;244m   To stay on v${running_major}.x, pin it in docker-compose.yml:\033[0m"
+            echo -e "\033[38;5;244m     image: remnawave/backend:${running_major}\033[0m"
+            exit 0
+        fi
+        echo -e "\033[1;32m✅ Major upgrade confirmed\033[0m"
+    fi
+
     # === ШАГ 5: Миграция переменных окружения ===
     echo -e "\033[38;5;250m📝 Step 5:\033[0m Checking environment configuration..."
     local env_migrated=false
