@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Version: 4.3.7
 set -e
-SCRIPT_VERSION="4.3.7"
+SCRIPT_VERSION="4.4.0"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -26,6 +26,14 @@ FORCE_SECRET_KEY=""       # If empty in force mode → will ask interactively
 FORCE_NODE_PORT=""        # If empty in force mode → uses default 3000
 FORCE_XTLS_PORT=""        # If empty in force mode → uses default 61000
 FORCE_INSTALL_XRAY=""     # If empty in force mode → skip xray installation
+
+# ============================================
+# Image tag override (--tag)
+# Installs a specific remnawave/node version instead of `latest`, e.g.
+# `--tag 2.8.0` to stay on the 2.x line while the panel is not updated yet.
+# Only exact versions exist upstream (no floating `2`/`3` tag).
+# ============================================
+NODE_IMAGE_TAG=""
 
 # ============================================
 # Auto-restart variables
@@ -149,6 +157,33 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift # past argument
+        ;;
+        --tag|--version|--node-version)
+            if [[ "$COMMAND" == "install" ]]; then
+                if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                    NODE_IMAGE_TAG="$2"
+                    shift 2
+                else
+                    echo "Error: --tag requires a value (e.g. --tag 2.8.0)."
+                    exit 1
+                fi
+            else
+                echo "Error: --tag parameter is only allowed with 'install' command."
+                exit 1
+            fi
+        ;;
+        --tag=*|--version=*|--node-version=*)
+            if [[ "$COMMAND" == "install" ]]; then
+                NODE_IMAGE_TAG="${1#*=}"
+                if [ -z "$NODE_IMAGE_TAG" ]; then
+                    echo "Error: --tag requires a value (e.g. --tag=2.8.0)."
+                    exit 1
+                fi
+                shift
+            else
+                echo "Error: --tag parameter is only allowed with 'install' command."
+                exit 1
+            fi
         ;;
         --source)
             if [[ "$COMMAND" == "install-script" ]]; then
@@ -900,6 +935,51 @@ enable_socket_command() {
     fi
 }
 
+# Newest published node tags, best-effort (Docker Hub needs no auth and mirrors
+# the same tags as GHCR). Used to make a wrong --tag actionable.
+list_available_node_tags() {
+    curl -s --max-time 10 "https://hub.docker.com/v2/repositories/remnawave/node/tags?page_size=25" 2>/dev/null \
+        | grep -oE '"name":"[^"]+"' | cut -d'"' -f4
+}
+
+# Check that an image tag actually exists before writing it into docker-compose.
+# A typo would otherwise only surface as a confusing pull failure later.
+# NOTE: remnawave/node publishes ONLY exact versions (3.0.0, 2.8.0, ...) plus
+# latest/dev — there is no floating major tag like ":2", unlike the backend.
+# `docker manifest inspect` needs no pull; if the registry itself is unreachable
+# we do not block the install — the pull will report the real problem.
+verify_node_tag_exists() {
+    local registry="$1"
+    local tag="$2"
+
+    if docker manifest inspect "${registry}:${tag}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Distinguish "tag missing" from "cannot check at all"
+    if ! docker manifest inspect "${registry}:latest" >/dev/null 2>&1; then
+        colorized_echo yellow "⚠️  Could not verify tag '${tag}' (registry unreachable) — continuing"
+        return 0
+    fi
+
+    # Registry is reachable → the tag is genuinely absent. Help the user out.
+    local tags
+    tags=$(list_available_node_tags)
+    if [ -n "$tags" ]; then
+        # A bare major like "2" is the most likely mistake — suggest its newest release
+        if [[ "$tag" =~ ^[0-9]+$ ]]; then
+            local newest
+            newest=$(echo "$tags" | grep -E "^${tag}\.[0-9]+\.[0-9]+$" | head -1)
+            if [ -n "$newest" ]; then
+                colorized_echo yellow "   Note: remnawave/node has no floating '${tag}' tag — use the exact version."
+                colorized_echo green  "   Did you mean:  --tag ${newest}"
+            fi
+        fi
+        colorized_echo yellow "   Available tags: $(echo "$tags" | head -8 | tr '\n' ' ')"
+    fi
+    return 1
+}
+
 install_remnanode() {
 
     if ! check_system_requirements; then
@@ -1089,12 +1169,27 @@ XTLS_API_PORT=$XTLS_API_PORT
 EOL
     colorized_echo green "Environment file saved in $ENV_FILE"
 
-    # Determine image based on --dev flag
+    # Determine image based on --dev / --tag flags
     IMAGE_TAG="latest"
     IMAGE_REGISTRY="ghcr.io/remnawave/node"
     if [ "$USE_DEV_BRANCH" == "true" ]; then
         IMAGE_TAG="dev"
         IMAGE_REGISTRY="remnawave/node"
+    fi
+
+    # --tag wins over --dev: an explicit version is never a guess
+    if [ -n "$NODE_IMAGE_TAG" ]; then
+        if [ "$USE_DEV_BRANCH" == "true" ]; then
+            colorized_echo yellow "⚠️  Both --dev and --tag given — using --tag $NODE_IMAGE_TAG"
+            IMAGE_REGISTRY="ghcr.io/remnawave/node"
+        fi
+        IMAGE_TAG="$NODE_IMAGE_TAG"
+        if ! verify_node_tag_exists "$IMAGE_REGISTRY" "$IMAGE_TAG"; then
+            colorized_echo red "Image ${IMAGE_REGISTRY}:${IMAGE_TAG} was not found in the registry."
+            colorized_echo yellow "   Check available tags: https://github.com/remnawave/node/pkgs/container/node"
+            exit 1
+        fi
+        colorized_echo green "✅ Pinned node image: ${IMAGE_REGISTRY}:${IMAGE_TAG}"
     fi
 
     colorized_echo blue "Generating docker-compose.yml file"
@@ -4141,6 +4236,12 @@ usage() {
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "--no-xray" "Skip Xray-core (default in force mode)"
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "--name NAME" "Custom installation name"
     printf "   \033[38;5;244m%-18s\033[0m %s\n" "--dev" "Use development image"
+    printf "   \033[38;5;244m%-18s\033[0m %s\n" "--tag TAG" "Pin node image version (e.g. 2.8.0)"
+    echo
+    echo -e "\033[38;5;244m   💡 --tag keeps the node on an older release for panels that are not\033[0m"
+    echo -e "\033[38;5;244m      updated yet. Use an EXACT version — remnawave/node publishes only\033[0m"
+    echo -e "\033[38;5;244m      exact tags (2.8.0, 3.0.0, ...), there is no floating '2'/'3' tag.\033[0m"
+    echo -e "\033[38;5;244m      A pinned node stays on that version: 'update' will not move it.\033[0m"
     echo
 
     echo -e "\033[1;37m⚙️  Service Control:\033[0m"

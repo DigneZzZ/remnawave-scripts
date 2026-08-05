@@ -115,6 +115,7 @@ remnanode xray_log_err    # real-time Xray errors
 | `--port=PORT` / `--xtls-port=PORT` | NODE_PORT (3000) / XTLS_API_PORT (61000) |
 | `--xray` / `--no-xray` | Whether to install Xray-core |
 | `--name NAME` / `--dev` | Directory name / dev image |
+| `--tag VERSION` | Pin the node image, e.g. `--tag 2.8.0` — stay on 2.x while the panel is not updated yet. Exact versions only: the node has no floating `2`/`3` tags. A pinned node is not moved by `update` |
 
 | Command | Description |
 |---|---|
