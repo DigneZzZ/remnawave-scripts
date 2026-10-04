@@ -6,7 +6,7 @@
 <circle cx="40" cy="18" r="6" fill="#ffbd2e"/>
 <circle cx="60" cy="18" r="6" fill="#27c93f"/>
 <text x="320" y="22" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#8b949e">netbird.sh — NetBird Installer</text>
-<text x="22" y="56" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">🐦 NetBird Installer </tspan><tspan fill="#8b949e">v1.4.2</tspan></text>
+<text x="22" y="56" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#e6edf3" font-weight="600">🐦 NetBird Installer </tspan><tspan fill="#8b949e">v2.0.0</tspan></text>
 <line x1="22" y1="72" x2="618" y2="72" stroke="#484f58" stroke-dasharray="1 0" stroke-width="1"/>
 <text x="22" y="90" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" xml:space="preserve"><tspan fill="#3fb950" font-weight="600">✅ NetBird: Connected </tspan><tspan fill="#8b949e">· peer 100.92.x.x · SSH policy on</tspan></text>
 <line x1="22" y1="106" x2="618" y2="106" stroke="#484f58" stroke-dasharray="1 0" stroke-width="1"/>

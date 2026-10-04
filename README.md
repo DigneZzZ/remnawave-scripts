@@ -60,7 +60,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 | 🛰 **remnanode.sh** | `4.6.0` | Node: Xray-core, logs, auto-restart | this file |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
-| 🐦 **netbird.sh** | `1.4.2` | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
+| 🐦 **netbird.sh** | `2.0.0` | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
 Every script keeps itself up to date: it checks its own version on `update` (and when the menu
 opens), applies a newer one **without asking**, and re-runs your command. Downloads try GitHub
