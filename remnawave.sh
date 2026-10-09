@@ -2703,7 +2703,7 @@ schedule_configure_telegram() {
         if [ -n "$current_token" ] && [ "$current_token" != "null" ]; then
             echo -e "\033[38;5;250mCurrent token: ${current_token:0:10}...\033[0m"
             read -p "Keep current token? [Y/n]: " keep_token
-            if [[ ! $keep_token =~ ^[Nn]$ ]]; then
+            if [[ $keep_token =~ ^[Nn]$ ]]; then
                 current_token=""
             fi
         fi
