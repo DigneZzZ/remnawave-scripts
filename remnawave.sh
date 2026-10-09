@@ -5086,7 +5086,7 @@ if [ "$TELEGRAM_ENABLED" = "true" ];
     if [ -f "$APP_DIR/.env" ]; then
         telegram_proxy=$(grep "^TELEGRAM_BOT_PROXY=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//;s/"$//' || true)
         if [ -n "$telegram_proxy" ] && [ "$telegram_proxy" != "change_me" ]; then
-            log_message "Using Telegram proxy: $telegram_proxy"
+            log_message "Using Telegram proxy: $(printf '%s' "$telegram_proxy" | sed -E 's#^([a-zA-Z0-9+.-]+://)?[^/]*@#\1***@#')"
         else
             telegram_proxy=""
         fi
@@ -7447,7 +7447,7 @@ schedule_test_telegram() {
         tg_proxy=$(grep "^TELEGRAM_BOT_PROXY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//;s/"$//' || true)
         if [ -n "$tg_proxy" ] && [ "$tg_proxy" != "change_me" ]; then
             curl_proxy_args="--proxy $tg_proxy"
-            echo -e "\033[38;5;244mUsing proxy: $tg_proxy\033[0m"
+            echo -e "\033[38;5;244mUsing proxy: $(printf '%s' "$tg_proxy" | sed -E 's#^([a-zA-Z0-9+.-]+://)?[^/]*@#\1***@#')\033[0m"
         fi
     fi
     
