@@ -4,7 +4,7 @@
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.7.1-blue.svg)](#-remnawave-panel)
+[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.7.2-blue.svg)](#-remnawave-panel)
 [![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.0-blue.svg)](#-remnanode)
 [![Panel](https://img.shields.io/badge/Remnawave_Panel-3.4.x_ready-brightgreen.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐-RU_|_EN-green.svg)](./README.md)
@@ -56,7 +56,7 @@ sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remn
 
 | Скрипт | Версия | Что делает | Документация |
 |---|---|---|---|
-| 🚀 **remnawave.sh** | `6.7.1` | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
+| 🚀 **remnawave.sh** | `6.7.2` | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
 | 🛰 **remnanode.sh** | `4.6.0` | Нода: Xray-core, логи, автоперезапуск | этот файл |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy-маскировка для Reality, 11 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard-outbound для Xray, WARP+ | [README-warp](./README-warp.md) |
@@ -78,7 +78,7 @@ sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remn
 - **Caddy reverse proxy** — авто-SSL, опционально портал аутентификации с MFA (Caddy Security)
 - **Subscription-page** — вместе с панелью или standalone на отдельном сервере; API-токен создаётся сам, с минимальными скоупами
 - **Безопасный `update`** — снапшот БД и конфигов перед обновлением + автоматические миграции (включая v2 → v3)
-- **Telegram** — уведомления и доставка бэкапов, поддержка тредов и прокси
+- **Telegram** — уведомления и доставка бэкапов, поддержка тредов, прокси и собственного адреса Bot API (свой сервер или relay)
 
 ```bash
 remnawave              # интерактивное меню

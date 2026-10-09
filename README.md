@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
-[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.7.1-blue.svg)](#-remnawave-panel)
+[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.7.2-blue.svg)](#-remnawave-panel)
 [![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.0-blue.svg)](#-remnanode)
 [![Panel](https://img.shields.io/badge/Remnawave_Panel-3.4.x_ready-brightgreen.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐-EN_|_RU-green.svg)](./README_RU.md)
@@ -56,7 +56,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 
 | Script | Version | Purpose | Docs |
 |---|---|---|---|
-| 🚀 **remnawave.sh** | `6.7.1` | Panel: install, Caddy, backups, subscription-page | this file |
+| 🚀 **remnawave.sh** | `6.7.2` | Panel: install, Caddy, backups, subscription-page | this file |
 | 🛰 **remnanode.sh** | `4.6.0` | Node: Xray-core, logs, auto-restart | this file |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
@@ -78,7 +78,7 @@ first, then jsDelivr mirrors. To install or refresh just the CLI on a server, us
 - **Caddy reverse proxy** — auto-SSL, optional authentication portal with MFA (Caddy Security)
 - **Subscription-page** — alongside the panel or standalone on a separate server; API token created automatically with least-privilege scopes
 - **Safe `update`** — DB + config snapshot before every update, plus automatic migrations (including v2 → v3)
-- **Telegram** — notifications and backup delivery, thread and proxy support
+- **Telegram** — notifications and backup delivery, thread, proxy and custom Bot API address support (self-hosted server or relay)
 
 ```bash
 remnawave              # interactive menu
