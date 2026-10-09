@@ -2709,7 +2709,8 @@ schedule_configure_telegram() {
         fi
         
         if [ -z "$current_token" ] || [ "$current_token" = "null" ]; then
-            read -p "Enter bot token: " bot_token
+            read -s -p "Enter bot token (input hidden): " bot_token
+            echo
             if [ -z "$bot_token" ]; then
                 echo -e "\033[1;31m❌ Token is required!\033[0m"
                 sleep 2
