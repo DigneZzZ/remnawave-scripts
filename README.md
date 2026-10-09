@@ -78,7 +78,7 @@ first, then jsDelivr mirrors. To install or refresh just the CLI on a server, us
 - **Caddy reverse proxy** — auto-SSL, optional authentication portal with MFA (Caddy Security)
 - **Subscription-page** — alongside the panel or standalone on a separate server; API token created automatically with least-privilege scopes
 - **Safe `update`** — DB + config snapshot before every update, plus automatic migrations (including v2 → v3)
-- **Telegram** — notifications and backup delivery, thread and proxy support
+- **Telegram** — notifications and backup delivery, thread, proxy and custom Bot API address support (self-hosted server or relay)
 
 ```bash
 remnawave              # interactive menu

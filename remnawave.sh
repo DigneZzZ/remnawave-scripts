@@ -4,7 +4,7 @@
 # VERSION=6.7.1
 
 SCRIPT_VERSION="6.7.1"
-BACKUP_SCRIPT_VERSION="1.5.0"  # Версия backup скрипта создаваемого Schedule функцией
+BACKUP_SCRIPT_VERSION="1.6.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 # Original invocation, captured before any shifting, so a self-update can
 # re-exec the new script with exactly the command the user typed.
@@ -1533,6 +1533,7 @@ prompt_backup_script_update() {
     echo -e "\033[38;5;250m   ✓ Automatic restore scripts included\033[0m"
     echo -e "\033[38;5;250m   ✓ Fixed Telegram file size limits (auto-split large backups)\033[0m"
     echo -e "\033[38;5;250m   ✓ Telegram proxy support (TELEGRAM_BOT_PROXY from .env)\033[0m"
+    echo -e "\033[38;5;250m   ✓ Custom Telegram Bot API address and send timeouts\033[0m"
     echo -e "\033[38;5;250m   ✓ Better error handling and logging\033[0m"
     echo -e "\033[38;5;250m   ✓ Enhanced restore compatibility\033[0m"
     echo
@@ -2278,6 +2279,7 @@ schedule_update_script() {
         echo -e "\033[38;5;250m   ✓ Unified backup structure (compatible with manual backups)\033[0m"
         echo -e "\033[38;5;250m   ✓ Improved compression and file handling\033[0m"
         echo -e "\033[38;5;250m   ✓ Telegram proxy support (TELEGRAM_BOT_PROXY from .env)\033[0m"
+        echo -e "\033[38;5;250m   ✓ Custom Telegram Bot API address and send timeouts\033[0m"
         echo -e "\033[38;5;250m   ✓ Better error handling and logging\033[0m"
         echo -e "\033[38;5;250m   ✓ Enhanced restore compatibility\033[0m"
         echo -e "\033[38;5;250m   ✓ Automatic version checking\033[0m"
@@ -2676,6 +2678,17 @@ schedule_configure_reverse_proxy() {
     sleep 2
 }
 
+# Prints the Bot API base URL (custom if enabled in backup-config.json, no trailing slash)
+schedule_get_telegram_api_server() {
+    local api_server="https://api.telegram.org"
+    if [ -f "$BACKUP_CONFIG_FILE" ] && [ "$(jq -r '.telegram.use_custom_api // false' "$BACKUP_CONFIG_FILE" 2>/dev/null)" = "true" ]; then
+        local custom
+        custom=$(jq -r '.telegram.api_server // ""' "$BACKUP_CONFIG_FILE" 2>/dev/null | sed 's#/*$##')
+        [ -n "$custom" ] && api_server="$custom"
+    fi
+    echo "$api_server"
+}
+
 schedule_configure_telegram() {
     clear
     echo -e "\033[1;37m📱 Configure Telegram Integration\033[0m"
@@ -2687,12 +2700,57 @@ schedule_configure_telegram() {
     if [[ $enable_telegram =~ ^[Yy]$ ]]; then
         schedule_update_config ".telegram.enabled" "true"
 
-        schedule_update_config ".telegram.use_custom_api" "false"
-        schedule_update_config ".telegram.api_server" "\"https://api.telegram.org\""
         schedule_update_config ".telegram.max_file_size" "49"
         schedule_update_config ".telegram.split_large_files" "true"
         
-        echo -e "\033[1;32m✅ Using official Telegram Bot API (49MB file limit)\033[0m"
+        # Bot API address (optional): self-hosted Bot API server or a relay
+        local cur_custom cur_server custom_api
+        cur_custom=$(jq -r '.telegram.use_custom_api // false' "$BACKUP_CONFIG_FILE" 2>/dev/null)
+        cur_server=$(jq -r '.telegram.api_server // ""' "$BACKUP_CONFIG_FILE" 2>/dev/null)
+        echo
+        echo -e "\033[1;37m🌐 Bot API Address (Optional)\033[0m"
+        echo -e "\033[38;5;244mSelf-hosted Bot API server or relay (e.g. Cloudflare Worker), useful where api.telegram.org is blocked\033[0m"
+        
+        local use_custom_api="false"
+        local ask_api="false"
+        if [ "$cur_custom" = "true" ] && [ -n "$cur_server" ]; then
+            read -p "Keep custom Bot API address ($cur_server)? [Y/n]: " keep_api
+            if [[ $keep_api =~ ^[Nn]$ ]]; then
+                ask_api="true"
+            else
+                use_custom_api="true"
+            fi
+        else
+            read -p "Use a custom Bot API address? [y/N]: " want_api
+            if [[ $want_api =~ ^[Yy]$ ]]; then
+                ask_api="true"
+            fi
+        fi
+
+        if [ "$ask_api" = "true" ]; then
+            read -p "Enter Bot API address, empty for official (e.g. https://tg-relay.example.com): " custom_api
+            custom_api=$(printf '%s' "$custom_api" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s#/*$##')
+            if [ -n "$custom_api" ] && [[ ! $custom_api =~ ^[a-zA-Z][a-zA-Z0-9+.-]*:// ]]; then
+                custom_api="https://$custom_api"
+            fi
+            if [ -z "$custom_api" ]; then
+                :
+            elif [[ $custom_api =~ ^https?://[^[:space:]\"\\]+$ ]]; then
+                schedule_update_config ".telegram.api_server" "\"$custom_api\""
+                use_custom_api="true"
+            else
+                echo -e "\033[1;33m⚠️  Invalid address (expected http:// or https://), using official API\033[0m"
+            fi
+        fi
+        
+        if [ "$use_custom_api" = "true" ]; then
+            schedule_update_config ".telegram.use_custom_api" "true"
+            echo -e "\033[1;32m✅ Using custom Bot API: $(jq -r '.telegram.api_server' "$BACKUP_CONFIG_FILE" 2>/dev/null) (49MB split limit kept)\033[0m"
+        else
+            schedule_update_config ".telegram.use_custom_api" "false"
+            schedule_update_config ".telegram.api_server" "\"https://api.telegram.org\""
+            echo -e "\033[1;32m✅ Using official Telegram Bot API (49MB file limit)\033[0m"
+        fi
         
         # Bot Token
         echo
@@ -4040,7 +4098,7 @@ schedule_create_backup_script() {
 #!/bin/bash
 
 # Backup Script Version - used for compatibility checking
-BACKUP_SCRIPT_VERSION="1.5.0"
+BACKUP_SCRIPT_VERSION="1.6.0"
 BACKUP_SCRIPT_DATE="$(date '+%Y-%m-%d')"
 
 # Читаем конфигурацию backup
@@ -5080,6 +5138,16 @@ if [ "$TELEGRAM_ENABLED" = "true" ];
     telegram_bot_token=$(jq -r '.telegram.bot_token' "$CONFIG_FILE")
     telegram_chat_id=$(jq -r '.telegram.chat_id' "$CONFIG_FILE")
     telegram_thread_id=$(jq -r '.telegram.thread_id' "$CONFIG_FILE")
+
+    # Bot API address: official by default, custom if enabled in the config (read at runtime)
+    telegram_api_server="https://api.telegram.org"
+    if [ "$(jq -r '.telegram.use_custom_api // false' "$CONFIG_FILE")" = "true" ]; then
+        telegram_custom_api=$(jq -r '.telegram.api_server // ""' "$CONFIG_FILE" | sed 's#/*$##')
+        if [ -n "$telegram_custom_api" ]; then
+            telegram_api_server="$telegram_custom_api"
+            log_message "Using custom Telegram Bot API: $telegram_api_server"
+        fi
+    fi
     
     # Читаем прокси из .env панели (если задан и раскомментирован)
     telegram_proxy=""
@@ -5156,7 +5224,7 @@ ${part_info}"
 
             # Используем обычный Markdown вместо MarkdownV2 для совместимости
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "$telegram_api_server/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
@@ -5164,7 +5232,7 @@ ${part_info}"
                     -F "message_thread_id=$telegram_thread_id" \
                     -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "$telegram_api_server/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
@@ -5201,14 +5269,14 @@ ${part_info}"
             local http_code
 
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "$telegram_api_server/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
                     -F "message_thread_id=$telegram_thread_id" \
                     -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "$telegram_api_server/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
@@ -7453,7 +7521,10 @@ schedule_test_telegram() {
     
     echo -e "\033[38;5;250mSending test message...\033[0m"
     
-    local api_url="https://api.telegram.org/bot$bot_token"
+    local api_server
+    api_server=$(schedule_get_telegram_api_server)
+    echo -e "\033[38;5;244mBot API: $api_server\033[0m"
+    local api_url="$api_server/bot$bot_token"
     local message="🧪 Test message from Remnawave Backup System
 📅 $(date '+%Y-%m-%d %H:%M:%S')
 ✅ Telegram integration is working correctly!"
