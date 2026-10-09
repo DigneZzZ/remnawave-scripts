@@ -5156,7 +5156,7 @@ ${part_info}"
 
             # Используем обычный Markdown вместо MarkdownV2 для совместимости
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
@@ -5164,7 +5164,7 @@ ${part_info}"
                     -F "message_thread_id=$telegram_thread_id" \
                     -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 600 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendDocument" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "document=@$file_path" \
                     -F "caption=$full_caption" \
@@ -5201,14 +5201,14 @@ ${part_info}"
             local http_code
 
             if [ -n "$telegram_thread_id" ] && [ "$telegram_thread_id" != "null" ]; then
-                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
                     -F "message_thread_id=$telegram_thread_id" \
                     -o "$response_file" -w "%{http_code}" 2>/dev/null)
             else
-                http_code=$(curl -s -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
+                http_code=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "https://api.telegram.org/bot$telegram_bot_token/sendMessage" \
                     -F "chat_id=$telegram_chat_id" \
                     -F "text=$message" \
                     -F "parse_mode=Markdown" \
@@ -7464,7 +7464,7 @@ schedule_test_telegram() {
         params="$params&message_thread_id=$thread_id"
     fi
     
-    local response=$(curl -s -X POST $curl_proxy_args "$api_url/sendMessage" -d "$params")
+    local response=$(curl -s --connect-timeout 20 --max-time 30 -X POST $curl_proxy_args "$api_url/sendMessage" -d "$params")
     
     if echo "$response" | jq -e '.ok' >/dev/null 2>&1; then
         echo -e "\033[1;32m✅ Test message sent successfully!\033[0m"
