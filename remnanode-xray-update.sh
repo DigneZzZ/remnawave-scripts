@@ -133,7 +133,11 @@ fetch_versions() {
         latest_releases=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=8")
     else
         colorized_echo cyan "   Stable releases only..."
-        latest_releases=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=15")
+        # XTLS помечает большинство релизов как pre-release: последний
+        # стабильный тег может находиться глубоко в списке (15+ записей).
+        # При маленькой per_page в выборку попадают только pre-release, и
+        # фильтр ниже не находит ни одной стабильной версии.
+        latest_releases=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=100")
     fi
     
     if [ -z "$latest_releases" ] || echo "$latest_releases" | grep -q '"message":'; then
@@ -246,7 +250,12 @@ get_xray_core() {
     local show_prereleases=false
     
     if ! fetch_versions "$show_prereleases"; then
-        exit 1
+        # Стабильных релизов может не оказаться в выборке GitHub (XTLS помечает
+        # pre-release почти все релизы). Не вылетаем, а откатываемся на показ
+        # всех релизов — иначе до меню с опцией A вообще не добраться.
+        colorized_echo yellow "   Falling back to all releases (incl. pre-releases)..."
+        show_prereleases=true
+        fetch_versions "$show_prereleases" || exit 1
     fi
     
     while true; do
