@@ -4,7 +4,7 @@
 
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
-[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.7.2-blue.svg)](#-remnawave-panel)
+[![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.8.0-blue.svg)](#-remnawave-panel)
 [![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.0-blue.svg)](#-remnanode)
 [![Panel](https://img.shields.io/badge/Remnawave_Panel-3.4.x_ready-brightgreen.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐-RU_|_EN-green.svg)](./README.md)
@@ -56,7 +56,7 @@ sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remn
 
 | Скрипт | Версия | Что делает | Документация |
 |---|---|---|---|
-| 🚀 **remnawave.sh** | `6.7.2` | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
+| 🚀 **remnawave.sh** | `6.8.0` | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
 | 🛰 **remnanode.sh** | `4.6.0` | Нода: Xray-core, логи, автоперезапуск | этот файл |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy-маскировка для Reality, 11 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard-outbound для Xray, WARP+ | [README-warp](./README-warp.md) |
@@ -76,6 +76,7 @@ sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remn
 - **Установка под ключ** — `.env`, секреты, порты, compose и админ создаются автоматически (креды в `admin-credentials.txt`)
 - **Формат ссылки подписки** — при установке выбирается `nanoid` (16..64 символов), `uuid` или свой шаблон; `update` дописывает блок в существующий `.env` и предлагает тот же выбор. Шаблон проверяется ровно так же, как это делает панель, и сразу показывается пример (панель 3.4.0+)
 - **Caddy reverse proxy** — авто-SSL, опционально портал аутентификации с MFA (Caddy Security)
+- **Ваши конфиги остаются вашими** — каждый сгенерированный файл (`Caddyfile`, `.env`, `.env.subscription`, `docker-compose.yml`) помечается строкой `# managed-by: remnawave.sh v<версия>` и sha256-файлом рядом. Как только вы правите файл вручную, скрипт перестаёт его перезаписывать: новый шаблон кладётся рядом как `<file>.new-<версия>` вместе с diff. Перед любым reload Caddy конфиг проверяется через `caddy validate` внутри работающего контейнера, а после reload опрашивается каждый домен — если домен перестал отвечать, файл откатывается автоматически
 - **Subscription-page** — вместе с панелью или standalone на отдельном сервере; API-токен создаётся сам, с минимальными скоупами
 - **Безопасный `update`** — снапшот БД и конфигов перед обновлением + автоматические миграции (включая v2 → v3)
 - **Telegram** — уведомления и доставка бэкапов, поддержка тредов, прокси и собственного адреса Bot API (свой сервер или relay)
@@ -101,6 +102,9 @@ remnawave backup       # бэкап вручную (или `schedule` — по �
 | `subpage` / `subpage-token` / `subpage-restart` | Управление subscription-page |
 | `install-subpage-standalone --with-caddy` | Subpage на отдельном сервере |
 | `caddy …` | Установка и управление Caddy (`up/down/logs/edit/reset-user`) |
+| `--yes` / `-y` | Не задавать вопросов; оставлять все правленые вручную конфиги как есть |
+| `--strict` | Ненулевой код выхода, если конфиг был оставлен вместо обновления |
+| `--catch-all` | Добавить блок `:443` catch-all в генерируемый Caddyfile |
 | `install-script` / `update-script` | Установить или обновить **сам CLI** — контейнеры не трогаются |
 | `uninstall-script` | Удалить CLI из `/usr/local/bin` |
 
@@ -315,6 +319,6 @@ sudo ufw enable
 
 [Сообщить об ошибке](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Предложить улучшение](https://github.com/DigneZzZ/remnawave-scripts/issues) · [Сообщество gig.ovh](https://gig.ovh) · [MIT License](./LICENSE)
 
-*PR приветствуются: fork → ветка → изменения → PR. Тестируйте на нескольких дистрибутивах.*
+*PR приветствуются: fork → ветка → изменения → PR. Тестируйте на нескольких дистрибутивах и запускайте `bash tests/run-tests.sh` ([tests/README](./tests/README.md)).*
 
 </div>

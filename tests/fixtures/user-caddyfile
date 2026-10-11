@@ -1,0 +1,50 @@
+# Reconstruction of the production Caddyfile that the 11.09 update destroyed:
+# hand-added mirrors, static certificates and a dns-01 block, none of which the
+# built-in template knows about.
+{
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+https://{$PANEL_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy remnawave:3000
+}
+
+https://{$PANEL_DOMAIN2} {
+    tls /ssl/fullchain2.pem /ssl/privkey2.key
+    reverse_proxy remnawave:3000
+}
+
+https://{$SUB_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy remnawave-subscription-page:3010
+}
+
+https://{$SUB_DOMAIN_FAILBACK} {
+    tls {
+        dns route53
+    }
+    reverse_proxy remnawave-subscription-page:3010
+}
+
+https://{$SUB_DOMAIN1} {
+    reverse_proxy remnawave-subscription-page:3010
+}
+
+https://{$SUB_DOMAIN2} {
+    tls /ssl/fullchain2.pem /ssl/privkey2.key
+    reverse_proxy remnawave-subscription-page:3010
+}
+
+https://{$SUB_DOMAIN3} {
+    reverse_proxy remnawave-subscription-page:3010
+}
+
+https://{$SUB_DOMAIN4} {
+    tls {
+        dns route53
+    }
+    reverse_proxy remnawave-subscription-page:3010
+}

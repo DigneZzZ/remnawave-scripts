@@ -1,0 +1,13 @@
+PANEL_DOMAIN=panel.example.com
+PANEL_DOMAIN2=panel2.example.com
+SUB_DOMAIN=sub.example.com
+SUB_DOMAIN_FAILBACK=sub-fb.example.com
+SUB_DOMAIN1=sub1.example.com
+SUB_DOMAIN2=sub2.example.com
+SUB_DOMAIN3=sub3.example.com
+SUB_DOMAIN4=sub4.example.com
+SUB_PREFIX=sub
+PANEL_HOST=remnawave
+PANEL_PORT=3000
+SUB_HOST=remnawave-subscription-page
+SUB_PORT=3010

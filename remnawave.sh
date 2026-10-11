@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Remnawave Panel Installation Script
 # This script installs and manages Remnawave Panel
-# VERSION=6.7.2
+# VERSION=6.8.0
 
-SCRIPT_VERSION="6.7.2"
+SCRIPT_VERSION="6.8.0"
 BACKUP_SCRIPT_VERSION="1.6.0"  # Версия backup скрипта создаваемого Schedule функцией
 
 # Original invocation, captured before any shifting, so a self-update can
@@ -35,6 +35,16 @@ SCRIPT_FILE="remnawave.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/${SCRIPT_REPO}/${SCRIPT_REF}/${SCRIPT_FILE}"
 SCRIPT_URL_OVERRIDDEN="false"   # set by --source
 SCRIPT_SOURCE_USED=""           # mirror the last successful download came from
+
+# ============================================
+# Config-safety flags (see the managed-files guard further down)
+#   --yes / -y   answer every "keep or overwrite?" prompt with "keep"
+#   --strict     turn a kept user-owned file into a non-zero exit
+#   --catch-all  re-add the :443 catch-all block to a generated Caddyfile
+# ============================================
+ASSUME_YES="false"
+STRICT_MODE="false"
+CADDY_CATCH_ALL="false"
 
 while [[ $# -gt 0 ]]; do  
     key="$1"  
@@ -72,6 +82,18 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: --source parameter is only allowed with 'install-script' command."
                 exit 1
             fi
+        ;;
+        --yes|-y)
+            ASSUME_YES="true"
+            shift
+        ;;
+        --strict)
+            STRICT_MODE="true"
+            shift
+        ;;
+        --catch-all)
+            CADDY_CATCH_ALL="true"
+            shift
         ;;
         --compress|-c|--data-only|--include-configs|-h|--help)
             # Аргументы команды backup - не обрабатываем здесь, пропускаем
@@ -1125,6 +1147,279 @@ check_subpage_trust_proxy_migration_needed() {
     return 0
 }
 
+# ===== TESTABLE-BLOCK: managed-files =====
+# Ownership guard for every file this script generates.
+#
+# Why this exists (production incident, 2026-09-11 22:58 CEST): `update`
+# regenerated /opt/caddy-remnawave/Caddyfile from the built-in template without
+# asking. The template only knows {$PANEL_DOMAIN} and {$SUB_DOMAIN}, so every
+# site block the admin had added by hand — {$SUB_DOMAIN_FAILBACK},
+# {$SUB_DOMAIN1..4}, {$PANEL_DOMAIN2}, static `tls /ssl/...` blocks and
+# `tls { dns route53 }` blocks — vanished. The subscription domain then fell
+# through to the catch-all `:443 { tls internal }`, which cannot answer an
+# unknown SNI, and every client got
+#   error:0A000438:SSL routines::tlsv1 alert internal error
+# until the file was restored from backup by hand.
+#
+# The rules now:
+#   * a file this script generated starts with
+#       # managed-by: remnawave.sh v<version>
+#     and its sha256 is stored in a sidecar next to it (.caddyfile.sha256 for
+#     Caddyfile, .env.sha256 for .env, ...);
+#   * it may be regenerated only while BOTH still match;
+#   * anything else is a user-owned file: it is never rewritten silently — the
+#     new template is dropped next to it as <file>.new-<version> with a diff.
+
+MF_MARKER_PREFIX="# managed-by: remnawave.sh v"
+MF_BACKUP_KEEP="${MF_BACKUP_KEEP:-10}"
+
+MF_WRITE_RESULT=""       # written | unchanged | kept | error (read by callers)
+MF_LAST_BACKUP=""        # backup created by the last guarded write
+MF_LAST_CANDIDATE=""     # <file>.new-<version> left behind for a user-owned file
+MF_STRICT_VIOLATION="false"   # set when --strict must turn a "kept" into exit 1
+
+mf_sha256_of() {
+    [ -f "$1" ] || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    else
+        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    fi
+}
+
+mf_marker() { echo "${MF_MARKER_PREFIX}${SCRIPT_VERSION}"; }
+
+# Caddyfile -> .caddyfile.sha256, .env -> .env.sha256, docker-compose.yml -> .docker-compose.yml.sha256
+mf_sidecar() {
+    local dir base
+    dir=$(dirname "$1")
+    base=$(basename "$1")
+    base="${base#.}"
+    printf '%s/.%s.sha256\n' "$dir" "$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+}
+
+mf_has_marker() {
+    head -n 1 "$1" 2>/dev/null | grep -q "^${MF_MARKER_PREFIX}"
+}
+
+# 0 only when this script wrote the file AND nobody has edited it since.
+mf_is_ours() {
+    local f="$1" side stored current
+    [ -f "$f" ] || return 1
+    mf_has_marker "$f" || return 1
+    side=$(mf_sidecar "$f")
+    [ -f "$side" ] || return 1
+    stored=$(head -n 1 "$side" 2>/dev/null | awk '{print $1}')
+    [ -n "$stored" ] || return 1
+    current=$(mf_sha256_of "$f")
+    [ "$stored" = "$current" ]
+}
+
+# Put the marker on line 1 (refreshing the version if it is already there) and
+# record the checksum. Written with "cat >" so the inode survives: the Caddyfile
+# is bind-mounted into the container and a mv would break the mount.
+mf_stamp() {
+    local f="$1" tmp
+    [ -f "$f" ] || return 1
+    tmp=$(mktemp) || return 1
+    if mf_has_marker "$f"; then
+        { mf_marker; tail -n +2 "$f"; } > "$tmp"
+    else
+        { mf_marker; cat "$f"; } > "$tmp"
+    fi
+    cat "$tmp" > "$f"
+    rm -f "$tmp"
+    mf_sha256_of "$f" > "$(mf_sidecar "$f")"
+}
+
+mf_prune_backups() {
+    local f="$1" old count=0
+    # Names are timestamps, so a reverse name sort is a reverse time sort and
+    # does not depend on mtime resolution.
+    for old in $(ls -1d "$f".backup.* 2>/dev/null | sort -r); do
+        count=$((count + 1))
+        if [ "$count" -gt "$MF_BACKUP_KEEP" ]; then
+            rm -f "$old"
+        fi
+    done
+    return 0
+}
+
+# Echoes the backup path; also leaves it in $MF_LAST_BACKUP for the rollback path.
+mf_backup() {
+    local f="$1" b n=1
+    [ -f "$f" ] || return 1
+    b="${f}.backup.$(date +%Y%m%d_%H%M%S)"
+    while [ -e "$b" ]; do
+        b="${f}.backup.$(date +%Y%m%d_%H%M%S)_${n}"
+        n=$((n + 1))
+    done
+    cp "$f" "$b" || return 1
+    MF_LAST_BACKUP="$b"
+    mf_prune_backups "$f"
+    echo "$b"
+}
+
+# Restore in place — same reason as mf_stamp: never break the bind mount.
+mf_restore() {
+    [ -f "$1" ] || return 1
+    cat "$1" > "$2"
+}
+
+mf_restore_hint() {
+    local backup="$1" target="$2" extra="$3"
+    if [ -n "$extra" ]; then
+        echo "cp $backup $target && $extra"
+    else
+        echo "cp $backup $target"
+    fi
+}
+
+mf_diff() {
+    if command -v diff >/dev/null 2>&1; then
+        diff -u "$1" "$2" 2>/dev/null | head -n 120
+    else
+        echo "(diff is not available on this system)"
+    fi
+}
+
+mf_is_interactive() {
+    [ "${ASSUME_YES:-false}" = "true" ] && return 1
+    [ -t 0 ] || return 1
+    return 0
+}
+
+# Guarded write.
+#   mf_write_guarded <target> <label> <generator> [generator args...]
+# The generator renders the template into the file passed as its first argument;
+# the ownership marker is added here so a generator never has to know about it.
+# Returns: 0 written, 1 error, 2 kept (user-owned), 3 unchanged.
+mf_write_guarded() {
+    local target="$1" label="$2"
+    shift 2
+    local generator="$1"
+    shift
+
+    MF_WRITE_RESULT=""
+    MF_LAST_BACKUP=""
+    MF_LAST_CANDIDATE=""
+
+    local raw staged
+    raw=$(mktemp) || { MF_WRITE_RESULT="error"; return 1; }
+    if ! "$generator" "$raw" "$@"; then
+        rm -f "$raw"
+        MF_WRITE_RESULT="error"
+        return 1
+    fi
+    staged=$(mktemp) || { rm -f "$raw"; MF_WRITE_RESULT="error"; return 1; }
+    { mf_marker; cat "$raw"; } > "$staged"
+    rm -f "$raw"
+
+    # 1) Nothing there yet — clean install, nothing to lose.
+    if [ ! -f "$target" ]; then
+        cat "$staged" > "$target"
+        rm -f "$staged"
+        mf_sha256_of "$target" > "$(mf_sidecar "$target")"
+        MF_WRITE_RESULT="written"
+        return 0
+    fi
+
+    # 2) Generated by this script and untouched since — safe to regenerate.
+    if mf_is_ours "$target"; then
+        if cmp -s "$staged" "$target"; then
+            rm -f "$staged"
+            MF_WRITE_RESULT="unchanged"
+            return 3
+        fi
+        mf_backup "$target" >/dev/null
+        cat "$staged" > "$target"
+        rm -f "$staged"
+        mf_sha256_of "$target" > "$(mf_sidecar "$target")"
+        MF_WRITE_RESULT="written"
+        return 0
+    fi
+
+    # 3) User-owned: no marker, or edited after we generated it.
+    if cmp -s "$staged" "$target"; then
+        rm -f "$staged"
+        MF_WRITE_RESULT="unchanged"
+        return 3
+    fi
+
+    local candidate="${target}.new-${SCRIPT_VERSION}"
+    cat "$staged" > "$candidate"
+    rm -f "$staged"
+    MF_LAST_CANDIDATE="$candidate"
+
+    echo
+    echo -e "\033[1;33m⚠️  $label was modified by hand (or predates this guard) — kept as is\033[0m"
+    echo -e "\033[38;5;244m   $target\033[0m"
+    echo -e "\033[38;5;244m   The new template was written to: $candidate\033[0m"
+    echo
+    echo -e "\033[38;5;244m   Difference (current → new template):\033[0m"
+    mf_diff "$target" "$candidate"
+    echo
+
+    if mf_is_interactive; then
+        local answer=""
+        read -p "Replace $label with the generated template? (y/N): " -r answer
+        if [[ $answer =~ ^[Yy]$ ]]; then
+            local backup
+            backup=$(mf_backup "$target")
+            cat "$candidate" > "$target"
+            rm -f "$candidate"
+            MF_LAST_CANDIDATE=""
+            mf_sha256_of "$target" > "$(mf_sidecar "$target")"
+            echo -e "\033[1;32m✅ $label replaced. Backup: $backup\033[0m"
+            echo -e "\033[38;5;244m   Undo: $(mf_restore_hint "$backup" "$target")\033[0m"
+            MF_WRITE_RESULT="written"
+            return 0
+        fi
+    fi
+
+    echo -e "\033[1;33m   $label kept unchanged — review $candidate and merge by hand if needed.\033[0m"
+    if [ "${STRICT_MODE:-false}" = "true" ]; then
+        MF_STRICT_VIOLATION="true"
+    fi
+    # shellcheck disable=SC2034  # consumed by callers and by tests/, not here
+    MF_WRITE_RESULT="kept"
+    return 2
+}
+
+# Lighter guard for the generators that write their heredoc straight into place.
+# Returns 0 when writing is safe, 1 when the file belongs to the user.
+mf_guard_before_write() {
+    local target="$1" label="${2:-$(basename "$1")}"
+
+    [ -f "$target" ] || return 0
+    mf_is_ours "$target" && return 0
+
+    echo
+    echo -e "\033[1;33m⚠️  $label already exists and was not generated by this script\033[0m"
+    echo -e "\033[38;5;244m   $target\033[0m"
+    echo -e "\033[38;5;244m   Overwriting it would discard your changes, so it is left alone.\033[0m"
+
+    if mf_is_interactive; then
+        local answer=""
+        read -p "Overwrite $label anyway? (y/N): " -r answer
+        if [[ $answer =~ ^[Yy]$ ]]; then
+            local backup
+            backup=$(mf_backup "$target")
+            echo -e "\033[38;5;244m   Backup: $backup\033[0m"
+            echo -e "\033[38;5;244m   Undo:   $(mf_restore_hint "$backup" "$target")\033[0m"
+            return 0
+        fi
+    fi
+
+    if [ "${STRICT_MODE:-false}" = "true" ]; then
+        MF_STRICT_VIOLATION="true"
+    fi
+    return 1
+}
+# ===== END TESTABLE-BLOCK: managed-files =====
+
 # ===== v6.6.0 Caddyfile migration =====
 #
 # Two defects in previously generated Caddyfiles:
@@ -1146,6 +1441,7 @@ check_subpage_trust_proxy_migration_needed() {
 # rewritten, so Caddy-security admin credentials keep matching the existing
 # /data users.json.
 
+# ===== TESTABLE-BLOCK: caddyfile-migration =====
 check_caddyfile_migration_needed() {
     [ -f "$CADDY_DIR/Caddyfile" ] || return 1
 
@@ -1162,10 +1458,8 @@ check_caddyfile_migration_needed() {
 migrate_caddyfile() {
     [ -f "$CADDY_DIR/Caddyfile" ] || return 1
 
-    echo -e "\033[1;36m🔄 Regenerating Caddyfile (subscription-page 8.0.0 /assets handling)\033[0m"
-
     local caddy_env="$CADDY_DIR/.env"
-    local panel_domain sub_domain sub_prefix secure_mode
+    local panel_domain sub_domain sub_prefix mode
 
     # Simple mode stores PANEL_DOMAIN, secure mode REMNAWAVE_PANEL_DOMAIN
     panel_domain=$(grep "^PANEL_DOMAIN=" "$caddy_env" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d "\"' ")
@@ -1181,10 +1475,10 @@ migrate_caddyfile() {
     [ -z "$sub_domain" ] && sub_domain="$panel_domain"
     [ -z "$sub_prefix" ] && sub_prefix="sub"
 
-    secure_mode="false"
-    grep -q "authenticate with remnawaveportal" "$CADDY_DIR/Caddyfile" 2>/dev/null && secure_mode="true"
+    mode="simple"
+    grep -q "authenticate with remnawaveportal" "$CADDY_DIR/Caddyfile" 2>/dev/null && mode="secure"
 
-    cp "$CADDY_DIR/Caddyfile" "$CADDY_DIR/Caddyfile.backup.$(date +%Y%m%d_%H%M%S)"
+    echo -e "\033[1;36m🔄 Checking the Caddyfile (subscription-page 8.0.0 /assets handling)\033[0m"
 
     # Add the upstream hostnames the new Caddyfile references. Appending only —
     # rewriting the file would regenerate AUTHP_ADMIN_SECRET and desync it from
@@ -1200,24 +1494,12 @@ migrate_caddyfile() {
         echo -e "\033[38;5;244m  ✓ Added PANEL_HOST / SUB_HOST to $caddy_env\033[0m"
     fi
 
-    if [ "$secure_mode" = "true" ]; then
-        create_secure_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
-    else
-        create_simple_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
-    fi
-    echo -e "\033[38;5;244m  ✓ Caddyfile regenerated ($([ "$secure_mode" = "true" ] && echo "secure" || echo "simple") mode)\033[0m"
-
-    # Reload rather than restart: a config error must not take the proxy down.
-    if [ -d "$CADDY_DIR" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^caddy-remnawave$'; then
-        if docker exec caddy-remnawave caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-            echo -e "\033[1;32m✅ Caddy reloaded with the new configuration\033[0m"
-        else
-            echo -e "\033[1;33m⚠️  Caddy reload failed — restart it manually: cd $CADDY_DIR && docker compose restart\033[0m"
-        fi
-    else
-        echo -e "\033[38;5;244m   Caddy is not running; the new config applies on next start\033[0m"
-    fi
+    # Guarded: a Caddyfile the admin has touched is never rewritten here. This is
+    # the exact path that wiped eight hand-written site blocks on 11.09.2026.
+    caddy_write_config "$mode" "$panel_domain" "$sub_domain" "$sub_prefix"
+    return $?
 }
+# ===== END TESTABLE-BLOCK: caddyfile-migration =====
 
 migrate_subpage_trust_proxy() {
     [ -f "$SUB_ENV_FILE" ] || return 1
@@ -8738,8 +9020,17 @@ install_caddy_reverse_proxy() {
         cp "$CADDY_DIR/.env" "$caddy_env_backup"
     fi
 
+    # Never clobber a .env the admin maintains: it carries the domains that
+    # every hand-written site block in the Caddyfile refers to.
+    local write_caddy_env="true"
+    if ! mf_guard_before_write "$CADDY_DIR/.env" "Caddy .env"; then
+        write_caddy_env="false"
+        colorized_echo yellow "   Keeping the existing $CADDY_DIR/.env — new values are NOT applied"
+    fi
+
     # Create .env file
-    cat > "$CADDY_DIR/.env" << EOF
+    if [ "$write_caddy_env" = "true" ]; then
+        cat > "$CADDY_DIR/.env" << EOF
 # Caddy Reverse Proxy for Remnawave
 # Generated on $(date)
 # Server IP: ${NODE_IP:-127.0.0.1}
@@ -8757,9 +9048,10 @@ SUB_PREFIX=$sub_prefix
 PANEL_HOST=$APP_NAME
 SUB_HOST=${APP_NAME}-subscription-page
 EOF
+    fi
 
     # Add security-specific env vars
-    if [ "$secure_mode" = "true" ]; then
+    if [ "$secure_mode" = "true" ] && [ "$write_caddy_env" = "true" ]; then
         local caddy_admin_user="admin"
         local caddy_admin_email="${caddy_admin_user}@${panel_domain}"
         local caddy_admin_password=""
@@ -8794,10 +9086,14 @@ AUTHP_ADMIN_SECRET=$caddy_admin_password
 EOF
     fi
 
-    colorized_echo green "✅ .env file created"
+    if [ "$write_caddy_env" = "true" ]; then
+        mf_stamp "$CADDY_DIR/.env"
+        colorized_echo green "✅ .env file created"
+    fi
     
     # Create docker-compose.yml — joins the panel network (${APP_NAME}-network)
-    cat > "$CADDY_DIR/docker-compose.yml" << EOF
+    if mf_guard_before_write "$CADDY_DIR/docker-compose.yml" "Caddy docker-compose.yml"; then
+        cat > "$CADDY_DIR/docker-compose.yml" << EOF
 services:
   caddy:
     image: $caddy_image
@@ -8834,19 +9130,24 @@ volumes:
     external: false
     name: caddy-ssl-data
 EOF
-
-    colorized_echo green "✅ docker-compose.yml created"
-    
-    # Create Caddyfile based on mode
-    if [ "$secure_mode" = "true" ]; then
-        # Secure mode with Caddy Security
-        create_secure_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+        mf_stamp "$CADDY_DIR/docker-compose.yml"
+        colorized_echo green "✅ docker-compose.yml created"
     else
-        # Simple mode
-        create_simple_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+        colorized_echo yellow "   Keeping the existing $CADDY_DIR/docker-compose.yml"
     fi
     
-    colorized_echo green "✅ Caddyfile created"
+    # Create the Caddyfile through the guard: generated as before on a fresh
+    # install, left untouched when the file on disk is the admin's.
+    local caddyfile_mode="simple"
+    [ "$secure_mode" = "true" ] && caddyfile_mode="secure"
+    caddy_write_config "$caddyfile_mode" "$panel_domain" "$sub_domain" "$sub_prefix"
+    local caddyfile_rc=$?
+    if [ "$caddyfile_rc" = "1" ]; then
+        colorized_echo red "❌ Caddyfile was not applied"
+        return 1
+    fi
+    
+    [ "$caddyfile_rc" = "0" ] && colorized_echo green "✅ Caddyfile created"
     echo
     
     # Create the panel network if it doesn't exist. The panel compose declares
@@ -8959,15 +9260,44 @@ CREDSEOF
     return 0
 }
 
+# ===== TESTABLE-BLOCK: caddyfile-template =====
+# Optional catch-all for HTTPS names that no site block above claims.
+#
+# It used to be written unconditionally as `:443 { tls internal; respond 204 }`,
+# which is what turned the 11.09 Caddyfile regression into a full outage: the
+# subscription domain lost its own block, landed here, and Caddy answered every
+# client with a TLS handshake failure (an internal CA cannot produce a cert for
+# an unknown SNI) instead of a clean 404 that would have been noticed at once.
+# Off by default now; `--catch-all` brings it back, aborting rather than
+# pretending the request was served.
+caddy_catch_all_block() {
+    [ "${CADDY_CATCH_ALL:-false}" = "true" ] || return 0
+    cat << 'CATCHALLEOF'
+
+# ⚠️  Catch-all (enabled with --catch-all).
+# ⚠️  This block swallows EVERY SNI that is not matched by a site block above.
+# ⚠️  A domain accidentally missing from this file will not fail loudly — it will
+# ⚠️  be served here with an internal certificate and break TLS for its clients.
+# ⚠️  Remove this block if you want unknown names to be rejected at the TCP level.
+:443 {
+    tls internal
+    abort
+}
+CATCHALLEOF
+}
+
 # Create simple Caddyfile (no security)
 create_simple_caddyfile() {
     local panel_domain="$1"
     local sub_domain="$2"
     local sub_prefix="${3:-sub}"
+    # Rendered into $CADDYFILE_OUT when the guard needs a candidate to diff
+    # against the file already on disk; otherwise straight into place.
+    local _out="${CADDYFILE_OUT:-$CADDY_DIR/Caddyfile}"
     
     if [ "$panel_domain" = "$sub_domain" ]; then
         # Same domain for panel and subscription page
-        cat > "$CADDY_DIR/Caddyfile" << EOF
+        cat > "$_out" << EOF
 # Caddy Reverse Proxy for Remnawave
 # Single domain configuration
 # Generated by remnawave.sh - GIG.OVH Project
@@ -9037,16 +9367,11 @@ https://{\$PANEL_DOMAIN} {
         }
     }
 }
-
-# Fallback for any other HTTPS requests
-:443 {
-    tls internal
-    respond 204
-}
 EOF
+        caddy_catch_all_block >> "$_out"
     else
         # Different domains for panel and subscription page
-        cat > "$CADDY_DIR/Caddyfile" << EOF
+        cat > "$_out" << EOF
 # Caddy Reverse Proxy for Remnawave
 # Multi-domain configuration
 # Generated by remnawave.sh - GIG.OVH Project
@@ -9111,13 +9436,8 @@ https://{\$SUB_DOMAIN} {
         }
     }
 }
-
-# Fallback for any other HTTPS requests
-:443 {
-    tls internal
-    respond 204
-}
 EOF
+        caddy_catch_all_block >> "$_out"
     fi
 }
 
@@ -9126,10 +9446,11 @@ create_secure_caddyfile() {
     local panel_domain="$1"
     local sub_domain="$2"
     local sub_prefix="${3:-sub}"
+    local _out="${CADDYFILE_OUT:-$CADDY_DIR/Caddyfile}"
     
     # Single domain with security
     if [ "$panel_domain" = "$sub_domain" ]; then
-        cat > "$CADDY_DIR/Caddyfile" << 'EOF'
+        cat > "$_out" << 'EOF'
 # Caddy Reverse Proxy for Remnawave with Security
 # Single domain + Secure configuration
 # Generated by remnawave.sh - GIG.OVH Project
@@ -9197,7 +9518,7 @@ https://{$REMNAWAVE_PANEL_DOMAIN} {
 
 EOF
         # Add subscription and assets routes (open for all)
-        cat >> "$CADDY_DIR/Caddyfile" << EOF
+        cat >> "$_out" << EOF
     # Assets — the panel and the subscription page BOTH serve /assets/*, so on a
     # shared domain they have to be told apart per request.
     #
@@ -9226,7 +9547,7 @@ EOF
     }
 
 EOF
-        cat >> "$CADDY_DIR/Caddyfile" << 'EOF'
+        cat >> "$_out" << 'EOF'
     # Auth portal
     handle /r {
         rewrite * /auth
@@ -9252,16 +9573,11 @@ EOF
         }
     }
 }
-
-# Fallback
-:443 {
-    tls internal
-    respond 204
-}
 EOF
+        caddy_catch_all_block >> "$_out"
     else
         # Multi-domain with security (panel only protected)
-        cat > "$CADDY_DIR/Caddyfile" << 'EOF'
+        cat > "$_out" << 'EOF'
 # Caddy Reverse Proxy for Remnawave with Security
 # Multi-domain + Secure configuration
 # Generated by remnawave.sh - GIG.OVH Project
@@ -9388,15 +9704,218 @@ https://{$SUB_DOMAIN} {
         }
     }
 }
-
-# Fallback
-:443 {
-    tls internal
-    respond 204
-}
 EOF
+        caddy_catch_all_block >> "$_out"
     fi
 }
+
+# ===== END TESTABLE-BLOCK: caddyfile-template =====
+
+# ===== TESTABLE-BLOCK: caddy-safety =====
+# Everything between the rendered template and a reloaded proxy.
+#
+# Order of operations, and why:
+#   1. probe every domain the current config serves  → what "working" means now
+#   2. guarded write (never silently overwrites)     → the 11.09 regression
+#   3. caddy validate inside the running container   → a broken file never loads
+#   4. reload
+#   5. probe again; a domain that answered before and does not answer now means
+#      the new config dropped it → restore the backup and reload back.
+
+CADDY_CONTAINER="${CADDY_CONTAINER:-caddy-remnawave}"
+CADDY_CONFIG_IN_CONTAINER="/etc/caddy/Caddyfile"
+CADDY_PROBE_TIMEOUT="${CADDY_PROBE_TIMEOUT:-7}"
+
+caddy_reload_cmdline() {
+    echo "docker exec ${CADDY_CONTAINER} caddy reload --config ${CADDY_CONFIG_IN_CONTAINER} --force"
+}
+
+caddy_is_running() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CADDY_CONTAINER}$"
+}
+
+# Validated inside the container so it sees the same env_file, mounts and Caddy
+# build (the security plugin) as the running server.
+caddy_validate_running_config() {
+    docker exec "$CADDY_CONTAINER" caddy validate \
+        --config "$CADDY_CONFIG_IN_CONTAINER" --adapter caddyfile 2>&1
+}
+
+caddy_reload_running() {
+    docker exec "$CADDY_CONTAINER" caddy reload \
+        --config "$CADDY_CONFIG_IN_CONTAINER" --force 2>&1
+}
+
+# Every hostname the proxy is supposed to answer for: all *DOMAIN* variables
+# from the Caddy .env (PANEL_DOMAIN, PANEL_DOMAIN2, SUB_DOMAIN,
+# SUB_DOMAIN_FAILBACK, SUB_DOMAIN1..4, REMNAWAVE_PANEL_DOMAIN, plus anything an
+# admin added) and any literal hostname used as a site address in the config.
+caddy_config_domains() {
+    local cfg="${1:-$CADDY_DIR/Caddyfile}" envfile="${2:-$CADDY_DIR/.env}"
+    {
+        if [ -f "$envfile" ]; then
+            grep -E '^[A-Za-z0-9_]*DOMAIN[A-Za-z0-9_]*=' "$envfile" 2>/dev/null \
+                | cut -d'=' -f2- | tr -d "\"' "
+        fi
+        if [ -f "$cfg" ]; then
+            grep -E '^[^#[:space:]].*\{[[:space:]]*$' "$cfg" 2>/dev/null \
+                | sed 's/{[[:space:]]*$//' \
+                | tr ',' '\n' \
+                | sed 's#^[[:space:]]*##; s#[[:space:]]*$##; s#^https\{0,1\}://##'
+        fi
+    } | sed 's#[:/].*$##' \
+      | grep -E '^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$' \
+      | sort -u
+}
+
+# Answered by this host? --resolve pins the name to the loopback interface so a
+# domain still pointing at Cloudflare (or nowhere yet) is tested against the
+# proxy we just reloaded, not against DNS.
+caddy_probe_domain() {
+    local domain="$1" code
+    code=$(curl -s -o /dev/null -k --max-time "$CADDY_PROBE_TIMEOUT" \
+           --resolve "${domain}:443:127.0.0.1" \
+           -w '%{http_code}' "https://${domain}/" 2>/dev/null)
+    case "$code" in
+        2??|3??) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the domains that answer right now — the baseline a rollback is judged
+# against. A domain that was already broken before the update is not our problem
+# and must not block the change.
+caddy_health_snapshot() {
+    local domain healthy=""
+    for domain in $(caddy_config_domains); do
+        if caddy_probe_domain "$domain"; then
+            healthy="$healthy $domain"
+        fi
+    done
+    echo "$healthy"
+}
+
+caddy_rollback() {
+    local target="$1" do_reload="${2:-reload}"
+
+    if [ -z "$MF_LAST_BACKUP" ] || [ ! -f "$MF_LAST_BACKUP" ]; then
+        echo -e "\033[1;31m   No backup to roll back to — the previous config was not ours.\033[0m"
+        return 1
+    fi
+
+    mf_restore "$MF_LAST_BACKUP" "$target"
+    # The restored content is the *previous* state: re-own it only if it carries
+    # our marker, otherwise drop the sidecar so it counts as user-owned again.
+    if mf_has_marker "$target"; then
+        mf_sha256_of "$target" > "$(mf_sidecar "$target")"
+    else
+        rm -f "$(mf_sidecar "$target")"
+    fi
+
+    echo -e "\033[1;33m   Rolled back to $MF_LAST_BACKUP\033[0m"
+    if [ "$do_reload" = "reload" ] && caddy_is_running; then
+        if caddy_reload_running >/dev/null 2>&1; then
+            echo -e "\033[1;32m   Caddy reloaded with the previous configuration\033[0m"
+        else
+            echo -e "\033[1;31m   Caddy did not reload — do it by hand:\033[0m"
+            echo -e "\033[38;5;244m   $(caddy_reload_cmdline)\033[0m"
+        fi
+    fi
+    return 0
+}
+
+# mf_write_guarded's generator contract, wrapping the two templates.
+caddyfile_render() {
+    local out="$1" mode="$2" panel_domain="$3" sub_domain="$4" sub_prefix="${5:-sub}"
+    local rc
+    CADDYFILE_OUT="$out"
+    if [ "$mode" = "secure" ]; then
+        create_secure_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+    else
+        create_simple_caddyfile "$panel_domain" "$sub_domain" "$sub_prefix"
+    fi
+    rc=$?
+    CADDYFILE_OUT=""
+    return $rc
+}
+
+# The only sanctioned way to put a Caddyfile on disk.
+# Returns: 0 applied (or nothing to do), 1 failed and rolled back,
+#          2 the admin's file was kept.
+caddy_write_config() {
+    local mode="$1" panel_domain="$2" sub_domain="$3" sub_prefix="${4:-sub}"
+    local target="$CADDY_DIR/Caddyfile"
+    local healthy_before="" rc validate_output reload_output
+
+    if caddy_is_running && [ -f "$target" ]; then
+        healthy_before=$(caddy_health_snapshot)
+    fi
+
+    mf_write_guarded "$target" "Caddyfile" caddyfile_render \
+        "$mode" "$panel_domain" "$sub_domain" "$sub_prefix"
+    rc=$?
+
+    case "$rc" in
+        1)
+            echo -e "\033[1;31m❌ Could not render the Caddyfile template\033[0m"
+            return 1
+            ;;
+        2)
+            echo -e "\033[38;5;244m   Caddy was not reloaded; the running configuration is unchanged.\033[0m"
+            echo -e "\033[38;5;244m   Apply the new template after merging it:\033[0m"
+            echo -e "\033[38;5;244m   $(mf_restore_hint "$MF_LAST_CANDIDATE" "$target" "$(caddy_reload_cmdline)")\033[0m"
+            return 2
+            ;;
+        3)
+            echo -e "\033[38;5;244m   Caddyfile already matches the current template\033[0m"
+            return 0
+            ;;
+    esac
+
+    if [ -n "$MF_LAST_BACKUP" ]; then
+        echo -e "\033[38;5;244m   Backup: $MF_LAST_BACKUP\033[0m"
+        echo -e "\033[38;5;244m   Undo:   $(mf_restore_hint "$MF_LAST_BACKUP" "$target" "$(caddy_reload_cmdline)")\033[0m"
+    fi
+
+    if ! caddy_is_running; then
+        echo -e "\033[38;5;244m   Caddy is not running; the new config applies on next start\033[0m"
+        return 0
+    fi
+
+    if ! validate_output=$(caddy_validate_running_config); then
+        echo -e "\033[1;31m❌ caddy validate rejected the generated config — not reloading\033[0m"
+        echo "$validate_output" | head -n 10 | sed 's/^/   /'
+        caddy_rollback "$target" "no-reload"
+        return 1
+    fi
+
+    if ! reload_output=$(caddy_reload_running); then
+        echo -e "\033[1;31m❌ caddy reload failed — rolling back\033[0m"
+        echo "$reload_output" | head -n 10 | sed 's/^/   /'
+        caddy_rollback "$target" "reload"
+        return 1
+    fi
+
+    local domain lost=""
+    for domain in $healthy_before; do
+        caddy_probe_domain "$domain" || lost="$lost $domain"
+    done
+
+    if [ -n "$lost" ]; then
+        echo -e "\033[1;31m❌ These domains answered before the update and do not any more:\033[0m"
+        echo -e "\033[1;31m  $lost\033[0m"
+        caddy_rollback "$target" "reload"
+        return 1
+    fi
+
+    if [ -n "$healthy_before" ]; then
+        echo -e "\033[1;32m✅ Caddy reloaded — all previously reachable domains still answer\033[0m"
+    else
+        echo -e "\033[1;32m✅ Caddy reloaded with the new configuration\033[0m"
+    fi
+    return 0
+}
+# ===== END TESTABLE-BLOCK: caddy-safety =====
 
 # Display final credentials summary after installation
 display_final_credentials_summary() {
@@ -9710,6 +10229,18 @@ caddy_restart_command() {
         return 1
     fi
     
+    # A restart with a broken Caddyfile takes the proxy down for every domain,
+    # so the running container gets to parse it first.
+    if is_caddy_up; then
+        local validate_output
+        if ! validate_output=$(caddy_validate_running_config); then
+            colorized_echo red "❌ The current Caddyfile is invalid — not restarting"
+            echo "$validate_output" | head -n 10 | sed 's/^/   /'
+            colorized_echo yellow "   Fix it with: $APP_NAME caddy edit"
+            return 1
+        fi
+    fi
+
     colorized_echo blue "Restarting Caddy..."
     cd "$CADDY_DIR"
     docker compose restart
@@ -9819,8 +10350,13 @@ caddy_edit_command() {
         return 1
     fi
     
+    local backup
+    backup=$(mf_backup "$caddyfile")
+    local healthy_before=""
+    is_caddy_up && healthy_before=$(caddy_health_snapshot)
+
     colorized_echo blue "Opening Caddyfile for editing..."
-    colorized_echo yellow "After editing, run: $APP_NAME caddy restart"
+    colorized_echo gray "Backup: $backup"
     echo
     
     if command -v nano >/dev/null 2>&1; then
@@ -9834,6 +10370,50 @@ caddy_edit_command() {
         colorized_echo yellow "Edit manually: $caddyfile"
         return 1
     fi
+
+    if cmp -s "$backup" "$caddyfile"; then
+        colorized_echo gray "No changes made."
+        rm -f "$backup"
+        return 0
+    fi
+
+    # The file is now the operator's, not the script's.
+    rm -f "$(mf_sidecar "$caddyfile")"
+
+    if ! is_caddy_up; then
+        colorized_echo yellow "Caddy is not running — start it with: $APP_NAME caddy up"
+        return 0
+    fi
+
+    local validate_output
+    if ! validate_output=$(caddy_validate_running_config); then
+        colorized_echo red "❌ caddy validate rejected your changes — not reloading"
+        echo "$validate_output" | head -n 10 | sed 's/^/   /'
+        echo
+        echo -e "\033[38;5;244m   Restore the previous version with:\033[0m"
+        echo -e "\033[38;5;244m   $(mf_restore_hint "$backup" "$caddyfile" "$(caddy_reload_cmdline)")\033[0m"
+        return 1
+    fi
+
+    MF_LAST_BACKUP="$backup"
+    if ! caddy_reload_running >/dev/null 2>&1; then
+        colorized_echo red "❌ caddy reload failed — rolling back"
+        caddy_rollback "$caddyfile" "reload"
+        return 1
+    fi
+
+    local domain lost=""
+    for domain in $healthy_before; do
+        caddy_probe_domain "$domain" || lost="$lost $domain"
+    done
+    if [ -n "$lost" ]; then
+        colorized_echo red "❌ These domains answered before your edit and do not any more:$lost"
+        caddy_rollback "$caddyfile" "reload"
+        return 1
+    fi
+
+    colorized_echo green "✅ Caddy reloaded with your changes"
+    echo -e "\033[38;5;244m   Undo: $(mf_restore_hint "$backup" "$caddyfile" "$(caddy_reload_cmdline)")\033[0m"
 }
 
 # Uninstall Caddy
@@ -10022,6 +10602,12 @@ caddy_command() {
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy edit" "📝 Edit Caddyfile"
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy reset-user" "🔑 Reset admin password (Secure mode)"
             printf "   \033[38;5;15m%-22s\033[0m %s\n" "$APP_NAME caddy uninstall" "🗑️  Remove Caddy"
+            echo
+            echo -e "\033[38;5;244m   The Caddyfile is only regenerated while it still matches the\033[0m"
+            echo -e "\033[38;5;244m   checksum this script recorded. Once you edit it, updates leave it\033[0m"
+            echo -e "\033[38;5;244m   alone and drop the new template next to it as Caddyfile.new-<version>.\033[0m"
+            echo -e "\033[38;5;244m   Flags: --yes (never prompt) · --strict (non-zero exit when kept) ·\033[0m"
+            echo -e "\033[38;5;244m          --catch-all (re-add the :443 catch-all block)\033[0m"
             echo
             ;;
     esac
@@ -11143,6 +11729,9 @@ install_remnawave() {
     fi
 
     colorized_echo blue "Generating .env file"
+    # Reinstalling over a configured panel must not throw away the operator's
+    # settings (and secrets) — the same rule the Caddyfile now follows.
+    if mf_guard_before_write "$ENV_FILE" ".env"; then
     cat > "$ENV_FILE" <<EOL
 ### APP ###
 APP_PORT=$APP_PORT
@@ -11279,11 +11868,16 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 POSTGRES_DB=postgres
 EOL
+    mf_stamp "$ENV_FILE"
     colorized_echo green "Environment file saved in $ENV_FILE"
+    else
+        colorized_echo yellow "   Keeping the existing $ENV_FILE"
+    fi
 
 SUB_ENV_FILE="$APP_DIR/.env.subscription"
 
 colorized_echo blue "Generating .env.subscription for subscription-page"
+if mf_guard_before_write "$SUB_ENV_FILE" ".env.subscription"; then
 cat > "$SUB_ENV_FILE" <<EOL
 ### Remnawave Panel URL, can be http://remnawave:3000 or https://panel.example.com
 ### Must include the scheme — the subscription page rejects anything else.
@@ -11320,9 +11914,14 @@ TRUST_PROXY=1
 #CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=
 
 EOL
+mf_stamp "$SUB_ENV_FILE"
 colorized_echo green "Subscription environment saved in $SUB_ENV_FILE"
+else
+    colorized_echo yellow "   Keeping the existing $SUB_ENV_FILE"
+fi
 
     colorized_echo blue "Generating docker-compose.yml file"
+    if mf_guard_before_write "$COMPOSE_FILE" "docker-compose.yml"; then
     cat > "$COMPOSE_FILE" <<EOL
 x-common: &common
     ulimits:
@@ -11445,7 +12044,11 @@ volumes:
         driver: local
         external: false
 EOL
+    mf_stamp "$COMPOSE_FILE"
     colorized_echo green "Docker Compose file saved in $COMPOSE_FILE"
+    else
+        colorized_echo yellow "   Keeping the existing $COMPOSE_FILE"
+    fi
 }
 
 uninstall_remnawave_script() {
@@ -12525,7 +13128,12 @@ install_subpage_command() {
             exit 1
         fi
 
-        # Create .env.subscription
+        # Create .env.subscription. The enclosing branch already established that
+        # the file is missing; the guard keeps that explicit next to the write.
+        if ! mf_guard_before_write "$SUB_ENV_FILE" ".env.subscription"; then
+            colorized_echo yellow "   Keeping the existing $SUB_ENV_FILE"
+            return 0
+        fi
         cat > "$SUB_ENV_FILE" << EOF
 ### Subscription Page Configuration
 ### Created by install-subpage command
@@ -12558,6 +13166,7 @@ TRUST_PROXY=1
 #MARZBAN_LEGACY_LINK_ENABLED=false
 #MARZBAN_LEGACY_SECRET_KEY=
 EOF
+        mf_stamp "$SUB_ENV_FILE"
         colorized_echo green "✅ Created $SUB_ENV_FILE"
     else
         colorized_echo green "✅ $SUB_ENV_FILE already exists"
@@ -12773,6 +13382,7 @@ install_subpage_standalone_command() {
     
     # Create .env.subscription
     colorized_echo blue "📝 Creating .env.subscription..."
+    if mf_guard_before_write "$SUB_ENV_FILE" ".env.subscription"; then
     cat > "$SUB_ENV_FILE" << EOF
 ### Standalone Subscription Page Configuration
 ### Created by install-subpage-standalone command
@@ -12805,7 +13415,11 @@ TRUST_PROXY=1
 #CLOUDFLARE_ZERO_TRUST_CLIENT_ID=
 #CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=
 EOF
+    mf_stamp "$SUB_ENV_FILE"
     colorized_echo green "✅ Created $SUB_ENV_FILE"
+    else
+        colorized_echo yellow "   Keeping the existing $SUB_ENV_FILE"
+    fi
     
     # Generate standalone docker-compose.yml
     colorized_echo blue "📝 Creating docker-compose.yml..."
@@ -12886,7 +13500,12 @@ EOF
 # Generate standalone docker-compose.yml for subscription-page only
 generate_standalone_subpage_compose() {
     local sub_port="${1:-3010}"
-    
+
+    if ! mf_guard_before_write "$COMPOSE_FILE" "docker-compose.yml"; then
+        colorized_echo yellow "   Keeping the existing $COMPOSE_FILE"
+        return 0
+    fi
+
     cat > "$COMPOSE_FILE" << EOL
 # Standalone Subscription-Page for Remnawave
 # Generated by remnawave.sh - GIG.OVH Project
@@ -12917,6 +13536,7 @@ networks:
         name: ${APP_NAME}-standalone-network
         driver: bridge
 EOL
+    mf_stamp "$COMPOSE_FILE"
 }
 
 # Install Caddy for standalone subscription-page
@@ -12999,7 +13619,8 @@ install_caddy_for_standalone_subpage() {
     echo
     
     # Create .env file
-    cat > "$CADDY_DIR/.env" << EOF
+    if mf_guard_before_write "$CADDY_DIR/.env" "Caddy .env"; then
+        cat > "$CADDY_DIR/.env" << EOF
 # Caddy Reverse Proxy for Standalone Subscription-Page
 # Generated on $(date)
 # Server IP: ${NODE_IP:-127.0.0.1}
@@ -13012,10 +13633,15 @@ SUB_PREFIX=$sub_prefix
 # standalone compose), not the compose service key.
 SUB_HOST=${APP_NAME}-subscription-page
 EOF
-    colorized_echo green "✅ .env file created"
+        mf_stamp "$CADDY_DIR/.env"
+        colorized_echo green "✅ .env file created"
+    else
+        colorized_echo yellow "   Keeping the existing $CADDY_DIR/.env"
+    fi
 
     # Create docker-compose.yml for Caddy
-    cat > "$CADDY_DIR/docker-compose.yml" << EOF
+    if mf_guard_before_write "$CADDY_DIR/docker-compose.yml" "Caddy docker-compose.yml"; then
+        cat > "$CADDY_DIR/docker-compose.yml" << EOF
 services:
   caddy:
     image: caddy:${CADDY_VERSION}
@@ -13050,10 +13676,16 @@ networks:
   ${APP_NAME}-standalone-network:
     external: true
 EOF
-    colorized_echo green "✅ docker-compose.yml created"
+        mf_stamp "$CADDY_DIR/docker-compose.yml"
+        colorized_echo green "✅ docker-compose.yml created"
+    else
+        colorized_echo yellow "   Keeping the existing $CADDY_DIR/docker-compose.yml"
+    fi
     
-    # Create Caddyfile for standalone subpage
-    cat > "$CADDY_DIR/Caddyfile" << EOF
+    # Create Caddyfile for standalone subpage. Same rule as everywhere else: an
+    # existing file that this script did not generate is never overwritten.
+    if mf_guard_before_write "$CADDY_DIR/Caddyfile" "Caddyfile"; then
+        cat > "$CADDY_DIR/Caddyfile" << EOF
 # Caddy Reverse Proxy for Standalone Subscription-Page
 # Generated by remnawave.sh - GIG.OVH Project
 
@@ -13094,7 +13726,11 @@ http://{\$SUB_DOMAIN} {
     redir https://{\$SUB_DOMAIN}{uri} permanent
 }
 EOF
-    colorized_echo green "✅ Caddyfile created"
+        mf_stamp "$CADDY_DIR/Caddyfile"
+        colorized_echo green "✅ Caddyfile created"
+    else
+        colorized_echo yellow "   Keeping the existing $CADDY_DIR/Caddyfile"
+    fi
     
     # Start Caddy
     colorized_echo blue "🚀 Starting Caddy..."
@@ -14399,6 +15035,17 @@ pg_upgrade_rollback() {
     echo -e "\033[38;5;244m   Previous state restored. Upgrade artifacts kept in $backup_dir\033[0m"
 }
 
+# Returns 1 when --strict was given and at least one user-owned config was kept
+# instead of being regenerated. Lets automation notice that the update finished
+# without applying the new templates.
+strict_violation_exit_code() {
+    if [ "${STRICT_MODE:-false}" = "true" ] && [ "${MF_STRICT_VIOLATION:-false}" = "true" ]; then
+        echo -e "\033[1;33m⚠️  --strict: one or more configuration files were kept as they are\033[0m"
+        return 1
+    fi
+    return 0
+}
+
 update_command() {
     check_running_as_root
     if ! is_remnawave_installed; then
@@ -14537,6 +15184,7 @@ update_command() {
         fi
 
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+        strict_violation_exit_code || exit 1
         exit 0
     fi
     
@@ -14735,6 +15383,8 @@ update_command() {
     echo -e "\033[38;5;250m💡 Services are running with latest versions\033[0m"
     echo -e "\033[38;5;8m   Check status: '\033[38;5;15msudo $APP_NAME status\033[38;5;8m'\033[0m"
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 50))\033[0m"
+
+    strict_violation_exit_code || exit 1
 }
 
 edit_command() {
@@ -15417,6 +16067,16 @@ usage() {
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy logs" "📋 View Caddy logs"
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy edit" "📝 Edit Caddyfile"
     printf "   \033[38;5;81m%-18s\033[0m %s\n" "caddy reset-user" "🔑 Reset admin password"
+    echo
+
+    echo -e "\033[1;37m🛡️  Config-safety flags:\033[0m"
+    printf "   \033[38;5;250m%-18s\033[0m %s\n" "--yes, -y" "Never prompt; keep every hand-edited config as it is"
+    printf "   \033[38;5;250m%-18s\033[0m %s\n" "--strict" "Exit non-zero when a config was kept instead of updated"
+    printf "   \033[38;5;250m%-18s\033[0m %s\n" "--catch-all" "Add the :443 catch-all block to a generated Caddyfile"
+    echo
+    echo -e "\033[38;5;244m   Generated files carry '# managed-by: remnawave.sh v<version>' and a\033[0m"
+    echo -e "\033[38;5;244m   sha256 sidecar. Once you edit one, the script stops rewriting it and\033[0m"
+    echo -e "\033[38;5;244m   leaves the new template next to it as <file>.new-<version>.\033[0m"
     echo
 
     echo -e "\033[38;5;8m💡 Flexible restore paths:\033[0m"
