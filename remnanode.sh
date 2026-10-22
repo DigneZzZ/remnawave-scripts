@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.6.0
+# Version: 4.6.1
 set -e
-SCRIPT_VERSION="4.6.0"
+SCRIPT_VERSION="4.6.1"
 
 # Original invocation, captured before any shifting, so a self-update can
 # re-exec the new script with exactly the command the user typed.
