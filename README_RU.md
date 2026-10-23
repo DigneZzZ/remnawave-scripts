@@ -5,7 +5,7 @@
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/Язык-Bash-blue.svg)](#)
 [![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.8.0-blue.svg)](#-remnawave-panel)
-[![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.1-blue.svg)](#-remnanode)
+[![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.2-blue.svg)](#-remnanode)
 [![Panel](https://img.shields.io/badge/Remnawave_Panel-3.4.x_ready-brightgreen.svg)](#)
 [![Локализация](https://img.shields.io/badge/🌐-RU_|_EN-green.svg)](./README.md)
 
@@ -57,7 +57,7 @@ sudo bash <(curl -Ls https://github.com/DigneZzZ/remnawave-scripts/raw/main/remn
 | Скрипт | Версия | Что делает | Документация |
 |---|---|---|---|
 | 🚀 **remnawave.sh** | `6.8.0` | Панель: установка, Caddy, бэкапы, subscription-page | этот файл |
-| 🛰 **remnanode.sh** | `4.6.1` | Нода: Xray-core, логи, автоперезапуск | этот файл |
+| 🛰 **remnanode.sh** | `4.6.2` | Нода: Xray-core, логи, автоперезапуск | этот файл |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy-маскировка для Reality, 11 шаблонов сайтов | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard-outbound для Xray, WARP+ | [README-warp](./README-warp.md) |
 | 🐦 **netbird.sh** | `1.4.2` | NetBird mesh-VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
@@ -140,6 +140,7 @@ sudo bash <(curl -Ls https://cdn.jsdelivr.net/gh/DigneZzZ/remnawave-scripts@main
 <div align="center"><img src="assets/preview-remnanode.svg" alt="Меню remnanode" width="640"></div>
 
 - **Xray-core** — установка и обновление из меню, включая pre-release; логи Xray в реальном времени
+- **Версия ноды** — определяется из установленного приложения в старых и новых образах, независимо от кастомного Xray-core
 - **Неинтерактивный режим** — `--force --secret-key="KEY"` для массового развёртывания
 - **NET_ADMIN** и миграции конфигурации добавляются автоматически при `update`
 - **Ротация логов** — 50 МБ × 5 файлов, без простоя; мультиарх: x86_64 / ARM64 / ARM32 / MIPS
@@ -150,8 +151,8 @@ remnanode core-update     # обновить Xray-core
 remnanode xray_log_err    # ошибки Xray в реальном времени
 ```
 
-Версия 4.6.1 доставляет исправление списка версий Xray в уже установленные скрипты:
-стабильные версии ищутся среди последних 100 релизов; если их нет, показываются pre-release.
+Стабильные версии Xray ищутся среди последних 100 релизов; если их нет,
+показываются pre-release.
 Обновите CLI: `sudo remnanode install-script`, затем запустите `sudo remnanode core-update`.
 
 <details>

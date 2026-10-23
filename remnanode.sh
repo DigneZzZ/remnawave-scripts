@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Version: 4.6.1
+# Version: 4.6.2
 set -e
-SCRIPT_VERSION="4.6.1"
+SCRIPT_VERSION="4.6.2"
 
 # Original invocation, captured before any shifting, so a self-update can
 # re-exec the new script with exactly the command the user typed.
@@ -1740,31 +1740,30 @@ is_remnanode_up() {
     fi
 }
 
-# Функция для получения версии RemnaNode из контейнера
+# Read the installed node, independently of the built-in or mounted Xray.
 get_remnanode_version() {
-    local container_name="$APP_NAME"
-    
-    # Проверяем что контейнер запущен
-    if ! docker exec "$container_name" echo "test" >/dev/null 2>&1; then
-        echo "unknown"
-        return 1
-    fi
-    
-    # Пробуем получить версию из package.json с помощью awk
-    local version=$(docker exec "$container_name" awk -F'"' '/"version"/{print $4; exit}' package.json 2>/dev/null)
-    
-    if [ -z "$version" ]; then
-        # Альтернативный способ с sed
-        version=$(docker exec "$container_name" sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json 2>/dev/null | head -1)
-    fi
-    
-    if [ -z "$version" ]; then
-        echo "unknown"
-        return 1
-    fi
-    
-    echo "$version"
-    return 0
+    # Older images ship package.json. Bundled images only ship dist/main.js,
+    # with the node version embedded in the startup banner by DefinePlugin.
+    # Do not execute the bundle: starting a second node would have side effects.
+    # Failure stays silent so callers add their fallback exactly once.
+    docker exec "$APP_NAME" node -e '
+        const fs = require("fs");
+        const valid = value => typeof value === "string" &&
+            /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value);
+        let version;
+        try {
+            version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+        } catch {}
+        if (!valid(version)) {
+            try {
+                const bundle = fs.readFileSync("dist/main.js", "utf8");
+                const match = bundle.match(/Remnawave Node v(?:["\x27`]\s*(?:\.concat\(\s*|\+\s*)["\x27`])?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/);
+                version = match && match[1];
+            } catch {}
+        }
+        if (!valid(version)) process.exit(1);
+        process.stdout.write(version + "\n");
+    ' 2>/dev/null
 }
 
 # Функция для получения версии Xray из контейнера
