@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Shell](https://img.shields.io/badge/language-Bash-blue.svg)](#)
 [![remnawave.sh](https://img.shields.io/badge/remnawave.sh-6.8.0-blue.svg)](#-remnawave-panel)
-[![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.1-blue.svg)](#-remnanode)
+[![remnanode.sh](https://img.shields.io/badge/remnanode.sh-4.6.2-blue.svg)](#-remnanode)
 [![Panel](https://img.shields.io/badge/Remnawave_Panel-3.4.x_ready-brightgreen.svg)](#)
 [![Localization](https://img.shields.io/badge/🌐-EN_|_RU-green.svg)](./README_RU.md)
 
@@ -57,7 +57,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 | Script | Version | Purpose | Docs |
 |---|---|---|---|
 | 🚀 **remnawave.sh** | `6.8.0` | Panel: install, Caddy, backups, subscription-page | this file |
-| 🛰 **remnanode.sh** | `4.6.1` | Node: Xray-core, logs, auto-restart | this file |
+| 🛰 **remnanode.sh** | `4.6.2` | Node: Xray-core, logs, auto-restart | this file |
 | 🎭 **selfsteal.sh** | `2.11.1` | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
 | 🐦 **netbird.sh** | `2.0.0` | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
@@ -140,6 +140,7 @@ sudo bash <(curl -Ls https://cdn.jsdelivr.net/gh/DigneZzZ/remnawave-scripts@main
 <div align="center"><img src="assets/preview-remnanode.svg" alt="remnanode menu" width="640"></div>
 
 - **Xray-core** — install and update from the menu, pre-releases included; real-time Xray logs
+- **Node version** — detected from the installed application in both older and bundled images, independently of a custom Xray-core
 - **Non-interactive mode** — `--force --secret-key="KEY"` for mass provisioning
 - **NET_ADMIN** capability and config migrations applied automatically on `update`
 - **Log rotation** — 50 MB × 5 files, zero downtime; multi-arch: x86_64 / ARM64 / ARM32 / MIPS
@@ -150,8 +151,8 @@ remnanode core-update     # update Xray-core
 remnanode xray_log_err    # real-time Xray errors
 ```
 
-Version 4.6.1 delivers the Xray release-list fix to existing installations: stable releases are
-searched across the latest 100 releases, with a fallback to pre-releases if none are found.
+Stable Xray versions are searched across the latest 100 releases, with a fallback to
+pre-releases if none are found.
 Refresh the CLI with `sudo remnanode install-script`, then run `sudo remnanode core-update`.
 
 <details>
