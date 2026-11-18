@@ -7,9 +7,9 @@
 # ║  Author:  DigneZzZ (https://github.com/DigneZzZ)               ║
 # ║  License: MIT                                                  ║
 # ╚════════════════════════════════════════════════════════════════╝
-# VERSION=2.11.1
+# VERSION=2.11.2
 
-SCRIPT_VERSION="2.11.1"
+SCRIPT_VERSION="2.11.2"
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -100,7 +100,7 @@ SOCKET_PATH="/dev/shm/nginx.sock"
 CONTAINER_NAME=""
 VOLUME_PREFIX=""
 CADDY_VERSION="2.11.4"
-NGINX_VERSION="1.29.3-alpine"
+NGINX_VERSION="1.30.7-alpine"
 
 # Paths Configuration (initialized by init_web_server_config)
 APP_NAME="selfsteal"
@@ -204,7 +204,7 @@ create_dir_safe() {
 # the local image with no further registry I/O.
 DOCKER_HUB_MIRRORS=("mirror.gcr.io" "dockerhub.timeweb.cloud" "huecker.io" "cr.yandex/mirror")
 
-# ensure_image <bare-ref>   e.g. caddy:2.11.4  or  nginx:1.29.3-alpine
+# ensure_image <bare-ref>   e.g. caddy:2.11.4  or  nginx:1.30.7-alpine
 # Guarantees the bare ref exists locally. Returns 0 on success, 1 if the image
 # cannot be obtained from Docker Hub or any mirror.
 ensure_image() {
@@ -269,6 +269,37 @@ ensure_runtime_image() {
         ensure_image "nginx:${NGINX_VERSION}"
     else
         ensure_image "caddy:${CADDY_VERSION}"
+    fi
+}
+
+report_nginx_version() {
+    [[ "$WEB_SERVER" == nginx && -f "$APP_DIR/docker-compose.yml" ]] || return 0
+
+    local output image major minor patch
+    local version_pattern='^nginx version: nginx/([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})([[:space:]]|$)'
+    if output=$(docker exec "$CONTAINER_NAME" nginx -v 2>&1) &&
+        [[ "$output" =~ $version_pattern ]]; then
+        printf '   NGINX version: %s.%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+        major=$((10#${BASH_REMATCH[1]}))
+        minor=$((10#${BASH_REMATCH[2]}))
+        patch=$((10#${BASH_REMATCH[3]}))
+
+        # The stable fix does not cover mainline 1.31.0 through 1.31.8.
+        if (( major < 1 || (major == 1 &&
+            (minor < 30 || (minor == 30 && patch < 7) || (minor == 31 && patch < 9))) )); then
+            echo -e "${YELLOW}⚠️  NGINX is below the nginx2root security fixes (stable 1.30.7, mainline 1.31.9).${NC}"
+            printf '   Set the nginx service image to nginx:%s in %s/docker-compose.yml and recreate the container.\n' \
+                "$NGINX_VERSION" "$APP_DIR"
+        fi
+        return 0
+    fi
+
+    echo -e "${YELLOW}⚠️  Could not verify the NGINX binary version in $CONTAINER_NAME.${NC}"
+    if image=$(docker container inspect --format '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null) &&
+        [ -n "$image" ]; then
+        printf '   Container image: %s\n' "$image"
+    elif image=$(cd "$APP_DIR" && docker compose config --images nginx 2>/dev/null) && [ -n "$image" ]; then
+        printf '   Configured image: %s\n' "$image"
     fi
 }
 
@@ -5367,7 +5398,7 @@ show_help() {
     printf "   ${CYAN}%-12s${NC} %s\n" "renew-ssl" "🔐 Renew/re-issue SSL certificate"
     printf "   ${CYAN}%-12s${NC} %s\n" "reissue-cert" "🔐 Force a fresh SSL certificate now (Caddy)"
     printf "   ${CYAN}%-12s${NC} %s\n" "menu" "📋 Show interactive menu"
-    printf "   ${CYAN}%-12s${NC} %s\n" "update" "🔄 Check for script updates"
+    printf "   ${CYAN}%-12s${NC} %s\n" "update" "🔄 Check for script updates and report the NGINX version"
     echo
     echo -e "${WHITE}One-liner Install Examples:${NC}"
     echo -e "  ${GRAY}# Nginx with auto ACME (interactive)${NC}"
@@ -5532,6 +5563,7 @@ check_for_updates_silent() {
 # Manual update command
 update_command() {
     check_running_as_root
+    report_nginx_version
     check_for_updates
 }
 
@@ -5831,6 +5863,7 @@ main_menu() {
         esac
         
         printf "   ${WHITE}%-10s${NC} ${GRAY}%s${NC}\n" "Server:" "$server_name"
+        report_nginx_version
         if [ -n "$domain" ]; then
             printf "   ${WHITE}%-10s${NC} ${GRAY}%s${NC}\n" "Domain:" "$domain"
         fi

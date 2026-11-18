@@ -2,7 +2,7 @@
 
 # 🎭 Selfsteal — Caddy/Nginx для Reality
 
-[![Версия](https://img.shields.io/badge/selfsteal.sh-2.11.1-blue.svg)](#-что-нового)
+[![Версия](https://img.shields.io/badge/selfsteal.sh-2.11.2-blue.svg)](#-что-нового)
 [![Веб-сервер](https://img.shields.io/badge/Caddy_%7C_Nginx-supported-brightgreen.svg)](#-сравнение-caddy-vs-nginx)
 [![Шаблоны](https://img.shields.io/badge/шаблонов-11_AI--generated-purple.svg)](#-шаблоны-сайтов)
 [![Лицензия MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](./LICENSE)
@@ -21,6 +21,7 @@
 
 | Версия | Главное |
 |---|---|
+| **2.11.2** | Новые установки используют `nginx:1.30.7-alpine` с исправлениями nginx2root. Меню и `selfsteal update` проверяют версию установленного NGINX. [Бюллетень NGINX](https://nginx.org/en/security_advisories.html) |
 | **2.11.1** | `--nginx`: перед установкой acme.sh проверяется и при необходимости ставится cron — без `crontab` установщик acme.sh завершается ошибкой, и выпуск сертификата срывался |
 | **2.11.0** | Проверка сертификата в главном меню и в `status`: выдан ли он на используемый домен, доверенный ли (не self-signed / Caddy Local Authority), сколько дней осталось — для Nginx и Caddy (ACME-сертификат Caddy читается прямо из Docker-тома) |
 | **2.10.1** | Исправлен выпуск SSL для Nginx: ACME-контакт больше не собирается из `hostname` (`user35123@debian.debian` отклонялся Let's Encrypt), битый аккаунт чинится автоматически ([#47](https://github.com/DigneZzZ/remnawave-scripts/issues/47)) |
@@ -100,7 +101,29 @@ selfsteal          # интерактивное меню
 | `renew-ssl` | Обновить сертификат (Caddy — форс-перевыпуск, Nginx — acme.sh) |
 | `reissue-cert [-f]` | Caddy: принудительный перевыпуск с бэкапом и автооткатом |
 | `guide` | Гайд по интеграции с Reality |
-| `update` | Обновление скрипта |
+| `update` / `check-update` | Проверка версии NGINX и обновление скрипта |
+
+### Обновление NGINX в существующей установке
+
+Скопируйте Compose-файл перед обновлением.
+
+```bash
+cd /opt/nginx-selfsteal &&
+  cp -p docker-compose.yml "docker-compose.yml.bak-$(date +%Y%m%d-%H%M%S)"
+```
+
+В `docker-compose.yml` укажите `image: nginx:1.30.7-alpine` для сервиса `nginx`. Загрузите образ, проверьте конфигурацию и пересоздайте контейнер. Сайт будет недоступен на время пересоздания.
+
+```bash
+docker compose pull nginx &&
+  docker run --rm --pull never \
+    -v "$PWD/nginx.conf:/etc/nginx/nginx.conf:ro" \
+    -v "$PWD/conf.d:/etc/nginx/conf.d:ro" \
+    -v "$PWD/ssl:/etc/nginx/ssl:ro" \
+    nginx:1.30.7-alpine nginx -t &&
+  docker compose up -d --no-deps nginx &&
+  docker exec nginx-selfsteal nginx -v
+```
 
 ## ⚖️ Сравнение Caddy vs Nginx
 

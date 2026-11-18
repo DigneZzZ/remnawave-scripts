@@ -58,7 +58,7 @@ After installation each script is a global command: `remnawave`, `remnanode`, `s
 |---|---|---|---|
 | 🚀 **remnawave.sh** | `6.8.0` | Panel: install, Caddy, backups, subscription-page | this file |
 | 🛰 **remnanode.sh** | `4.6.2` | Node: Xray-core, logs, auto-restart | this file |
-| 🎭 **selfsteal.sh** | `2.11.1` | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
+| 🎭 **selfsteal.sh** | `2.11.2` | Caddy masking for Reality, 11 website templates | [README-selfsteal](./README-selfsteal.md) |
 | 🌐 **wtm.sh** | `1.5.2` | WARP + Tor: WireGuard outbound for Xray, WARP+ | [README-warp](./README-warp.md) |
 | 🐦 **netbird.sh** | `2.0.0` | NetBird mesh VPN: CLI / cloud-init / Ansible | [README-netbird](./README-netbird.md) |
 
